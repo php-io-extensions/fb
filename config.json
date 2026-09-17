@@ -1,0 +1,27 @@
+{
+    "namespace": "fb",
+    "name": "fb",
+    "extension-name": "fb",
+    "description": "Framebuffers for the Venusian Surface CPU renderers: five buffer kinds in C",
+    "author": "Project Saturn Studios, LLC",
+    "version": "0.8.0",
+    "extra-sources": ["src/fb-api.c"],
+    "optimizer-dirs": ["optimizers"],
+    "warnings": {
+        "unused-variable": true,
+        "unused-variable-external": true,
+        "possible-wrong-parameter": true,
+        "possible-wrong-parameter-undefined": true,
+        "nonexistent-function": true,
+        "nonexistent-class": true
+    },
+    "optimizations": {
+        "call-gatherer-pass": true,
+        "check-invalid-reads": true,
+        "constant-folding": true,
+        "local-context-pass": true,
+        "static-constant-class-folding": true,
+        "static-type-inference": true,
+        "static-type-inference-second-pass": true
+    }
+}

@@ -1,0 +1,52 @@
+{
+    "name": "php-io-extensions/fb",
+    "type": "php-ext",
+    "description": "Pixel storage in C: FbFormat describes a byte layout, FbBuffer holds one surface in it and reads, writes, converts and copies it",
+    "keywords": [
+        "framebuffer",
+        "pixels",
+        "rgb565",
+        "epaper",
+        "php-ext"
+    ],
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "Project Saturn Studios, LLC",
+            "email": "info@projectsaturnstudios.com"
+        }
+    ],
+    "require": {
+        "php": ">=8.4"
+    },
+    "require-dev": {
+        "pestphp/pest": "^4.0"
+    },
+    "config": {
+        "allow-plugins": {
+            "pestphp/pest-plugin": true
+        }
+    },
+    "extra": {
+        "branch-alias": {
+            "dev-main": "0.10.x-dev"
+        }
+    },
+    "php-ext": {
+        "extension-name": "fb",
+        "priority": 30,
+        "support-zts": true,
+        "support-nts": true,
+        "os-families": [
+            "linux",
+            "darwin"
+        ],
+        "configure-options": [
+            {
+                "name": "enable-fb",
+                "description": "Enable the fb extension",
+                "needs-value": false
+            }
+        ]
+    }
+}

@@ -113,4 +113,16 @@ void fb_plane(const fb_format *format, const uint8_t *bytes, int width, int heig
  */
 void fb_paint_spans(const fb_format *format, uint8_t *bytes, int width, int height, const uint8_t *spans, size_t count, uint32_t rgba);
 
+/*
+ * Paint RGBA8 pixels (`source_width` x `source_height`, straight alpha) through an
+ * inverse placement. For each pixel of `target`, a rect inside the buffer, the point
+ * (u, v) = (ia*x + ic*y + ie, ib*x + id*y + if) at the pixel's centre picks the source
+ * pixel when it lies inside the image: the one under it, or with `smooth` the four
+ * around it (weights in 1/256ths, colours weighed by alpha, edges held). It is blended
+ * like a span, with alpha = (source alpha * opacity + 127) / 255. `row` is the row of a
+ * larger surface this buffer's row 0 stands for: y counts from there.
+ */
+void fb_paint_rgba8(const fb_format *format, uint8_t *bytes, int width, int height, const uint8_t *rgba8, int source_width, int source_height,
+	const double inverse[6], fb_rect target, int opacity, int smooth, int row);
+
 #endif

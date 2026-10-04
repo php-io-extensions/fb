@@ -55,6 +55,14 @@ rasteriser such as ext-rasterize answers: RGB and grey layouts blend
 source-over by alpha × coverage, mono, palette and planar layouts write the
 colour where that reaches half.
 
+`paintRgba8($rgba8, $w, $h, $inverse, $x, $y, $tw, $th, $opacity, $smooth, $row)`
+places an RGBA8 image scaled, turned or moved: `$inverse` is the six numbers
+`[a, b, c, d, e, f]` that map a target pixel's centre back to a point of the
+image, the target rect says which pixels to visit, and each one is blended by
+source alpha × opacity, from the nearest source pixel or smoothly from the
+four around it. `$row` is for a buffer that is a window onto a taller surface:
+the surface row its own row 0 stands for.
+
 Coordinates outside a buffer are a `ValueError`. A pixel list with any entry
 outside is refused whole, with nothing written. The stubs in `stubs/` are the
 full declaration.

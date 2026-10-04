@@ -240,3 +240,56 @@ it('checks every span before painting any, and answers null for none', function 
         ->and($buffer->paintSpans('', 0xFFFFFFFF))->toBeNull()
         ->and($buffer->paintSpans(spanBytes([3, 6, 2, 1]), 0))->toBe([6, 3, 2, 1]);
 });
+
+it('paints RGBA8 pixels through an inverse placement: nearest, smooth, turned, blended', function (): void {
+    $red = 'ff0000ff';
+    $green = '00ff00ff';
+    $scaled = buffer(FB_LAYOUT_RGBA8888, 4, 2);
+    $scaled->paintRgba8(hex2bin($red.$green), 2, 1, [0.5, 0, 0, 0.5, 0, 0], 0, 0, 4, 2);
+    $smooth = buffer(FB_LAYOUT_RGBA8888, 4, 1);
+    $smooth->paintRgba8(hex2bin('000000ff'.'ffffffff'), 2, 1, [0.5, 0, 0, 1, 0, 0], 0, 0, 4, 1, 255, true);
+    $clear = buffer(FB_LAYOUT_RGBA8888, 4, 1);
+    $clear->paintRgba8(hex2bin('00ff0000'.'ff0000ff'), 2, 1, [0.5, 0, 0, 1, 0, 0], 0, 0, 4, 1, 255, true);
+    $turned = buffer(FB_LAYOUT_RGBA8888, 2, 2);
+    $turned->paintRgba8(hex2bin($red.$green), 2, 1, [0, -1, 1, 0, 0, 2], 0, 0, 2, 2);
+    $blended = buffer(FB_LAYOUT_RGBA8888, 2, 1);
+    $blended->fill(0xFFFFFFFF);
+    $blended->paintRgba8(hex2bin($red), 1, 1, [1, 0, 0, 1, 0, 0], 0, 0, 1, 1, 128);
+    $blended->paintRgba8(hex2bin('ff000080'), 1, 1, [1, 0, 0, 1, -1, 0], 1, 0, 1, 1);
+    $mono = buffer(FB_LAYOUT_MONO_ROWS, 8, 1);
+    $mono->paintRgba8(hex2bin('ffffff7f'.'ffffff80'), 2, 1, [1, 0, 0, 1, 0, 0], 0, 0, 8, 1);
+
+    expect(bin2hex($scaled->bytes()))->toBe($red.$red.$green.$green.$red.$red.$green.$green)
+        ->and(bin2hex($smooth->bytes()))->toBe('000000ff'.'404040ff'.'bfbfbfff'.'ffffffff')
+        ->and(bin2hex($clear->bytes()))->toBe('00000000'.'40000040'.'bf0000bf'.'ff0000ff')
+        ->and(bin2hex($turned->bytes()))->toBe('00000000'.$red.'00000000'.$green)
+        ->and(bin2hex($blended->bytes()))->toBe('ff7f7fff'.'ff7f7fff')
+        ->and(bin2hex($mono->bytes()))->toBe('40');
+});
+
+it('counts rows from the surface row its own row 0 stands for', function (): void {
+    $window = buffer(FB_LAYOUT_RGBA8888, 1, 2);
+    $window->paintRgba8(hex2bin('ff0000ff'.'00ff00ff'.'0000ffff'.'ffffffff'), 1, 4, [1, 0, 0, 1, 0, 0], 0, 0, 1, 2, 255, false, 2);
+
+    expect(bin2hex($window->bytes()))->toBe('0000ffff'.'ffffffff');
+});
+
+it('refuses a malformed image, inverse, target, opacity or row, painting nothing', function (): void {
+    $buffer = buffer(FB_LAYOUT_RGB565, 4, 4);
+    $pixel = "\xff\xff\xff\xff";
+    $identity = [1, 0, 0, 1, 0, 0];
+
+    expect(fn () => $buffer->paintRgba8('short', 1, 1, $identity, 0, 0, 1, 1))->toThrow(ValueError::class, 'must be 1x1 RGBA8 pixels (4 bytes), 5 given')
+        ->and(fn () => $buffer->paintRgba8('', 0, 1, $identity, 0, 0, 1, 1))->toThrow(ValueError::class, 'must be between 1 and 65535')
+        ->and(fn () => $buffer->paintRgba8($pixel, 1, 1, [1, 0, 0, 1, 0], 0, 0, 1, 1))->toThrow(ValueError::class, 'must be a list of six finite numbers')
+        ->and(fn () => $buffer->paintRgba8($pixel, 1, 1, [1, 0, 0, 1, 0, NAN], 0, 0, 1, 1))->toThrow(ValueError::class, 'must be a list of six finite numbers')
+        ->and(fn () => $buffer->paintRgba8($pixel, 1, 1, [1, 0, 0, 1, 0, '0'], 0, 0, 1, 1))->toThrow(ValueError::class, 'must be a list of six finite numbers')
+        ->and(fn () => $buffer->paintRgba8($pixel, 1, 1, ['a' => 1, 0, 0, 1, 0, 0], 0, 0, 1, 1))->toThrow(ValueError::class, 'must be a list of six finite numbers')
+        ->and(fn () => $buffer->paintRgba8($pixel, 1, 1, $identity, 3, 0, 2, 1))->toThrow(ValueError::class, 'is empty or not inside a 4x4 framebuffer')
+        ->and(fn () => $buffer->paintRgba8($pixel, 1, 1, $identity, 0, 0, 0, 1))->toThrow(ValueError::class, 'is empty or not inside')
+        ->and(fn () => $buffer->paintRgba8($pixel, 1, 1, $identity, 0, 0, 1, 1, 256))->toThrow(ValueError::class, 'must be between 0 and 255')
+        ->and(fn () => $buffer->paintRgba8($pixel, 1, 1, $identity, 0, 0, 1, 1, -1))->toThrow(ValueError::class, 'must be between 0 and 255')
+        ->and(fn () => $buffer->paintRgba8($pixel, 1, 1, $identity, 0, 0, 1, 1, 255, false, -1))->toThrow(ValueError::class, 'must be between 0 and 65535')
+        ->and(fn () => $buffer->paintRgba8($pixel, 1, 1, $identity, 0, 0, 1, 1, 255, false, 65536))->toThrow(ValueError::class, 'must be between 0 and 65535')
+        ->and(bin2hex($buffer->bytes()))->toBe(str_repeat('00', 32));
+});

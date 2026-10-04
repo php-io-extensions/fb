@@ -5,7 +5,7 @@ description: Scratch build with gen_stub, the two installers, Pest, the Pi loop.
 resource: install-macos.sh
 tags: [build, linux, macos, pest]
 status: draft
-generated: { by: claude-opus/5.5, at: 2026-10-03T21:08:45Z }
+generated: { by: claude-opus/5.5, at: 2026-10-04T01:13:30Z }
 sources:
   - id: mac
     resource: install-macos.sh
@@ -26,6 +26,8 @@ macOS (`install-macos.sh`): builds in a temp copy for php@8.4 and php@8.4-zts, a
 Linux (`install-debian-trixie.sh`): builds in place, installs `fb.so`, writes `30-fb.ini`, removes build output.[^debian]
 
 Pi from the Mac: tree on the Mac is authoritative, Pi copy disposable. `COPYFILE_DISABLE=1 tar --no-mac-metadata --exclude .git -czf - -C <ext> . | fnk 'tar -xzf - -C ~/fb'`, install, Pest, `rm -rf ~/fb`. Without `--no-mac-metadata` the copy carries `._*` files that gen_stub trips on.
+
+`config.m4` passes `-ffp-contract=off`: `paintRgba8()` maps pixel centres in doubles, and a fused multiply-add would move a sample point. Check with `objdump -d src/.libs/core.o | grep -c fmadd`: 0 on arm64.
 
 A PHP can carry the 0.8 Zephir ext, also named `fb`. Loading both warns `Module "fb" is already loaded` and the old one wins: install over it, or test with a `PHP_INI_SCAN_DIR` that omits `30-fb.ini`.
 

@@ -535,6 +535,81 @@ ZEND_METHOD(FbBuffer, paintSpans)
 	phpfb_return_rect(return_value, (fb_rect) {left, top, right - left, bottom - top});
 }
 
+ZEND_METHOD(FbBuffer, paintRgba8)
+{
+	zend_string *rgba8;
+	HashTable *inverse_list;
+	zend_long width, height, x, y, target_width, target_height, opacity = 255, row = 0;
+	bool smooth = false;
+
+	ZEND_PARSE_PARAMETERS_START(8, 11)
+		Z_PARAM_STR(rgba8)
+		Z_PARAM_LONG(width)
+		Z_PARAM_LONG(height)
+		Z_PARAM_ARRAY_HT(inverse_list)
+		Z_PARAM_LONG(x)
+		Z_PARAM_LONG(y)
+		Z_PARAM_LONG(target_width)
+		Z_PARAM_LONG(target_height)
+		Z_PARAM_OPTIONAL
+		Z_PARAM_LONG(opacity)
+		Z_PARAM_BOOL(smooth)
+		Z_PARAM_LONG(row)
+	ZEND_PARSE_PARAMETERS_END();
+	PHPFB_THIS_BUFFER(self);
+
+	if (width < 1 || width > FB_MAX_SIDE) {
+		zend_argument_value_error(2, "must be between 1 and %d", FB_MAX_SIDE);
+		RETURN_THROWS();
+	}
+	if (height < 1 || height > FB_MAX_SIDE) {
+		zend_argument_value_error(3, "must be between 1 and %d", FB_MAX_SIDE);
+		RETURN_THROWS();
+	}
+	if (ZSTR_LEN(rgba8) != (size_t) width * (size_t) height * 4) {
+		zend_argument_value_error(1, "must be " ZEND_LONG_FMT "x" ZEND_LONG_FMT " RGBA8 pixels (%zu bytes), %zu given",
+			width, height, (size_t) width * (size_t) height * 4, ZSTR_LEN(rgba8));
+		RETURN_THROWS();
+	}
+
+	double inverse[6];
+	uint32_t count = 0;
+	zval *entry;
+	if (!zend_array_is_list(inverse_list) || zend_hash_num_elements(inverse_list) != 6) {
+		zend_argument_value_error(4, "must be a list of six finite numbers");
+		RETURN_THROWS();
+	}
+	ZEND_HASH_FOREACH_VAL(inverse_list, entry) {
+		ZVAL_DEREF(entry);
+		if (Z_TYPE_P(entry) == IS_LONG) {
+			inverse[count] = (double) Z_LVAL_P(entry);
+		} else if (Z_TYPE_P(entry) == IS_DOUBLE && zend_finite(Z_DVAL_P(entry))) {
+			inverse[count] = Z_DVAL_P(entry);
+		} else {
+			zend_argument_value_error(4, "must be a list of six finite numbers");
+			RETURN_THROWS();
+		}
+		count++;
+	} ZEND_HASH_FOREACH_END();
+
+	if (!phpfb_rect_inside(self, x, y, target_width, target_height)) {
+		zend_value_error("The region " ZEND_LONG_FMT "x" ZEND_LONG_FMT " at (" ZEND_LONG_FMT ", " ZEND_LONG_FMT ") is empty or not inside a %dx%d framebuffer.",
+			target_width, target_height, x, y, self->width, self->height);
+		RETURN_THROWS();
+	}
+	if (opacity < 0 || opacity > 255) {
+		zend_argument_value_error(9, "must be between 0 and 255");
+		RETURN_THROWS();
+	}
+	if (row < 0 || row > FB_MAX_SIDE) {
+		zend_argument_value_error(11, "must be between 0 and %d", FB_MAX_SIDE);
+		RETURN_THROWS();
+	}
+
+	fb_paint_rgba8(&self->format, self->bytes, self->width, self->height, (const uint8_t *) ZSTR_VAL(rgba8), (int) width, (int) height,
+		inverse, (fb_rect) {(int) x, (int) y, (int) target_width, (int) target_height}, (int) opacity, smooth, (int) row);
+}
+
 ZEND_METHOD(FbBuffer, pointer)
 {
 	ZEND_PARSE_PARAMETERS_NONE();

@@ -5,7 +5,7 @@ description: Constants, FbFormat, FbBuffer: every method, what it refuses.
 resource: stubs/
 tags: [fb, pixels, c]
 status: draft
-generated: { by: claude-opus/5.5, at: 2026-10-03T23:06:56Z }
+generated: { by: claude-opus/5.5, at: 2026-10-04T01:13:30Z }
 sources:
   - id: stubs
     resource: stubs/
@@ -43,6 +43,7 @@ Refused (`ValueError`): unknown layout/order/scan; three-channel order on 32-bit
 | `copy(FbBuffer, x, y, w, h)` | same size + storage; words as stored |
 | `plane(v)` | 1 bpp, x0 in bit 7, set where word == v |
 | `paintSpans(spans, rgba)` | 7-byte spans (y, x, length uint16; coverage uint8) in `0xRRGGBBAA`; all checked first; effective alpha `(alpha × coverage + 127) / 255`; RGB and palette-less grey blend source-over through the mapper, mono, index-with-palette and planar write where it reaches 128; returns the spans' bounding box or null |
+| `paintRgba8(rgba8, w, h, inverse, x, y, tw, th, opacity = 255, smooth = false, row = 0)` | RGBA8 image through an inverse placement `[a, b, c, d, e, f]`: each pixel of the target rect (inside the buffer) maps its centre to `(a·x + c·y + e, b·x + d·y + f)`, y counted from `row` (the row of a larger surface this buffer's row 0 stands for); inside the image it takes the pixel under it, or with `smooth` the four around it (1/256 weights, colours weighed by alpha, edges held); blended like a span at `(source alpha × opacity + 127) / 255` |
 | `pointer()`, `granularity()` | address of the bytes; `[w, 8]` for mono pages, `[1, 1]` otherwise |
 
 Both classes: final, no clone, no serialize, second `__construct` is `Error`.

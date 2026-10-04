@@ -1,5 +1,6 @@
 #include "core.h"
 
+#include <math.h>
 #include <string.h>
 
 /* Rec. 709 luma weights scaled by 10000: luma(255, 255, 255) is 2 550 000. */
@@ -698,6 +699,26 @@ void fb_copy(const fb_format *f, uint8_t *bytes, const uint8_t *source, int widt
 	}
 }
 
+/* One pixel, source-over at alpha `a` where the format blends; the colour itself from 128 up where it cannot. */
+static inline void fb_blend(const fb_format *f, uint8_t *bytes, int width, int height, int x, int y, uint32_t red, uint32_t green, uint32_t blue, uint32_t a, int blends)
+{
+	if (a == 0 || (!blends && a < 128)) {
+		return;
+	}
+	if (a == 255 || !blends) {
+		fb_set(f, bytes, width, height, x, y, fb_map(f, (int) red, (int) green, (int) blue, 255));
+		return;
+	}
+
+	uint32_t d = fb_unmap(f, fb_get(f, bytes, width, height, x, y));
+
+	fb_set(f, bytes, width, height, x, y, fb_map(f,
+		(int) ((red * a + (d >> 24) * (255 - a) + 127) / 255),
+		(int) ((green * a + ((d >> 16) & 0xFF) * (255 - a) + 127) / 255),
+		(int) ((blue * a + ((d >> 8) & 0xFF) * (255 - a) + 127) / 255),
+		(int) ((255 * a + (d & 0xFF) * (255 - a) + 127) / 255)));
+}
+
 void fb_paint_spans(const fb_format *f, uint8_t *bytes, int width, int height, const uint8_t *spans, size_t count, uint32_t rgba)
 {
 	uint32_t red = rgba >> 24, green = (rgba >> 16) & 0xFF, blue = (rgba >> 8) & 0xFF, alpha = rgba & 0xFF;
@@ -717,13 +738,72 @@ void fb_paint_spans(const fb_format *f, uint8_t *bytes, int width, int height, c
 			continue;
 		}
 		for (int px = x; px < x + length; px++) {
-			uint32_t d = fb_unmap(f, fb_get(f, bytes, width, height, px, y));
+			fb_blend(f, bytes, width, height, px, y, red, green, blue, a, 1);
+		}
+	}
+}
 
-			fb_set(f, bytes, width, height, px, y, fb_map(f,
-				(int) ((red * a + (d >> 24) * (255 - a) + 127) / 255),
-				(int) ((green * a + ((d >> 16) & 0xFF) * (255 - a) + 127) / 255),
-				(int) ((blue * a + ((d >> 8) & 0xFF) * (255 - a) + 127) / 255),
-				(int) ((255 * a + (d & 0xFF) * (255 - a) + 127) / 255)));
+static inline int fb_clamp_int(int value, int low, int high)
+{
+	return value < low ? low : (value > high ? high : value);
+}
+
+void fb_paint_rgba8(const fb_format *f, uint8_t *bytes, int width, int height, const uint8_t *rgba8, int source_width, int source_height,
+	const double inverse[6], fb_rect target, int opacity, int smooth, int row)
+{
+	double ia = inverse[0], ib = inverse[1], ic = inverse[2], id = inverse[3], ie = inverse[4], jf = inverse[5];
+	int blends = f->mode == FB_MODE_RGB || f->mode == FB_MODE_GREY;
+
+	for (int y = target.y; y < target.y + target.height; y++) {
+		double py = (double) (y + row) + 0.5;
+
+		for (int x = target.x; x < target.x + target.width; x++) {
+			double px = (double) x + 0.5;
+			double u = ia * px + ic * py + ie;
+			double v = ib * px + id * py + jf;
+			uint32_t red, green, blue, alpha;
+
+			if (!(u >= 0 && u < (double) source_width && v >= 0 && v < (double) source_height)) {
+				continue;
+			}
+
+			if (!smooth) {
+				const uint8_t *p = rgba8 + ((size_t) floor(v) * (size_t) source_width + (size_t) floor(u)) * 4;
+
+				red = p[0];
+				green = p[1];
+				blue = p[2];
+				alpha = p[3];
+			} else {
+				/* The four pixels around the point, weights in 1/256ths, colours weighed by their alpha. */
+				double fx = u - 0.5, fy = v - 0.5;
+				double x0 = floor(fx), y0 = floor(fy);
+				uint32_t tx = (uint32_t) floor((fx - x0) * 256), ty = (uint32_t) floor((fy - y0) * 256);
+				int xa = fb_clamp_int((int) x0, 0, source_width - 1), xb = fb_clamp_int((int) x0 + 1, 0, source_width - 1);
+				int ya = fb_clamp_int((int) y0, 0, source_height - 1), yb = fb_clamp_int((int) y0 + 1, 0, source_height - 1);
+				const int at[4][2] = {{ya, xa}, {ya, xb}, {yb, xa}, {yb, xb}};
+				const uint32_t weights[4] = {(256 - tx) * (256 - ty), tx * (256 - ty), (256 - tx) * ty, tx * ty};
+				uint64_t sum = 0, reds = 0, greens = 0, blues = 0;
+
+				for (int k = 0; k < 4; k++) {
+					const uint8_t *p = rgba8 + ((size_t) at[k][0] * (size_t) source_width + (size_t) at[k][1]) * 4;
+					uint64_t weighed = (uint64_t) weights[k] * p[3];
+
+					sum += weighed;
+					reds += weighed * p[0];
+					greens += weighed * p[1];
+					blues += weighed * p[2];
+				}
+				if (sum == 0) {
+					continue;
+				}
+				red = (uint32_t) ((reds + sum / 2) / sum);
+				green = (uint32_t) ((greens + sum / 2) / sum);
+				blue = (uint32_t) ((blues + sum / 2) / sum);
+				alpha = (uint32_t) ((sum + 32768) >> 16);
+			}
+
+			fb_blend(f, bytes, width, height, x, y, red, green, blue, (alpha * (uint32_t) opacity + 127) / 255, blends);
 		}
 	}
 }

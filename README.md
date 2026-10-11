@@ -1,5 +1,7 @@
 # ext-fb
 
+[![CI](https://img.shields.io/github/actions/workflow/status/php-io-extensions/fb/ci.yml?style=flat-square&label=CI)](https://github.com/php-io-extensions/fb/actions/workflows/ci.yml)
+
 Pixel storage in C. `FbFormat` says how pixels are stored; `FbBuffer` holds one
 surface in that format and reads, writes, converts and copies it. Written
 directly in C against the Zend API, with no dependency: it knows nothing of any

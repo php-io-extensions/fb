@@ -166,6 +166,10 @@ ZEND_METHOD(FbBuffer, __construct)
 		zend_argument_value_error(3, "must be between 1 and %d", FB_MAX_SIDE);
 		RETURN_THROWS();
 	}
+	if (!phpfb_addressable(width, height)) {
+		zend_value_error("A " ZEND_LONG_FMT "x" ZEND_LONG_FMT " framebuffer is too large to address on this platform.", width, height);
+		RETURN_THROWS();
+	}
 
 	self->format = phpfb_format_from(format)->format;
 	ZVAL_OBJ_COPY(&self->format_object, format);
@@ -408,9 +412,9 @@ ZEND_METHOD(FbBuffer, blitRgba8)
 		zend_argument_value_error(3, "must be between 1 and %d", FB_MAX_SIDE);
 		RETURN_THROWS();
 	}
-	if (ZSTR_LEN(rgba8) != (size_t) width * (size_t) height * 4) {
-		zend_argument_value_error(1, "must be " ZEND_LONG_FMT "x" ZEND_LONG_FMT " RGBA8 pixels (%zu bytes), %zu given",
-			width, height, (size_t) width * (size_t) height * 4, ZSTR_LEN(rgba8));
+	if ((uint64_t) ZSTR_LEN(rgba8) != (uint64_t) width * (uint64_t) height * 4u) {
+		zend_argument_value_error(1, "must be " ZEND_LONG_FMT "x" ZEND_LONG_FMT " RGBA8 pixels (%" PRIu64 " bytes), %zu given",
+			width, height, (uint64_t) width * (uint64_t) height * 4u, ZSTR_LEN(rgba8));
 		RETURN_THROWS();
 	}
 
@@ -566,9 +570,9 @@ ZEND_METHOD(FbBuffer, paintRgba8)
 		zend_argument_value_error(3, "must be between 1 and %d", FB_MAX_SIDE);
 		RETURN_THROWS();
 	}
-	if (ZSTR_LEN(rgba8) != (size_t) width * (size_t) height * 4) {
-		zend_argument_value_error(1, "must be " ZEND_LONG_FMT "x" ZEND_LONG_FMT " RGBA8 pixels (%zu bytes), %zu given",
-			width, height, (size_t) width * (size_t) height * 4, ZSTR_LEN(rgba8));
+	if ((uint64_t) ZSTR_LEN(rgba8) != (uint64_t) width * (uint64_t) height * 4u) {
+		zend_argument_value_error(1, "must be " ZEND_LONG_FMT "x" ZEND_LONG_FMT " RGBA8 pixels (%" PRIu64 " bytes), %zu given",
+			width, height, (uint64_t) width * (uint64_t) height * 4u, ZSTR_LEN(rgba8));
 		RETURN_THROWS();
 	}
 

@@ -31,6 +31,22 @@ it('sizes a surface by its layout', function (int $layout, int $bytes): void {
     'planar: a mono plane per ink' => [FB_LAYOUT_PLANAR, 40],
 ]);
 
+it('sizes the largest surface exactly on a 64-bit PHP', function (): void {
+    $rgba = new FbFormat(FB_LAYOUT_RGBA8888, channelOrder: FB_CHANNELS_RGBA);
+
+    expect($rgba->size(65535, 16385))->toBe(4_295_163_900)
+        ->and($rgba->size(65535, 65535))->toBe(17_179_344_900);
+})->skip(PHP_INT_SIZE !== 8, 'a 32-bit PHP refuses these sides');
+
+it('refuses a surface a 32-bit PHP cannot address instead of wrapping its size', function (): void {
+    $rgba = new FbFormat(FB_LAYOUT_RGBA8888, channelOrder: FB_CHANNELS_RGBA);
+
+    // 65535 x 16385 x 4 wraps a 32-bit size_t to 196,604 bytes.
+    expect(fn () => $rgba->size(65535, 16385))->toThrow(ValueError::class, 'A 65535x16385 surface is too large to address on this platform.')
+        ->and(fn () => new FbBuffer($rgba, 65535, 16385))->toThrow(ValueError::class, 'A 65535x16385 framebuffer is too large to address on this platform.')
+        ->and((new FbBuffer($rgba, 23166, 23166))->size())->toBe(23166 * 23166 * 4);
+})->skip(PHP_INT_SIZE !== 4, 'a 64-bit PHP addresses every side up to 65535');
+
 it('refuses a format that stores nothing', function (Closure $make, string $why): void {
     expect($make)->toThrow(ValueError::class, $why);
 })->with([

@@ -181,6 +181,10 @@ ZEND_METHOD(FbFormat, size)
 		zend_argument_value_error(2, "must be between 1 and %d", FB_MAX_SIDE);
 		RETURN_THROWS();
 	}
+	if (!phpfb_addressable(width, height)) {
+		zend_value_error("A " ZEND_LONG_FMT "x" ZEND_LONG_FMT " surface is too large to address on this platform.", width, height);
+		RETURN_THROWS();
+	}
 
 	RETURN_LONG((zend_long) fb_size(&self->format, (int) width, (int) height));
 }

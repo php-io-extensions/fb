@@ -7,3 +7,11 @@
 * `FbBuffer::paintSpans()`: coverage spans blended or thresholded in C, version unchanged; `src/` builds warning-free under `-Wall -Wextra`. [surface](api/surface.md)
 * `FbBuffer::paintRgba8()`: an RGBA8 image placed through an inverse affine, nearest or smooth, blended; built `-ffp-contract=off`; version unchanged. [surface](api/surface.md), [build](runbooks/build.md)
 * `paintRgba8()` gains `row`: the surface row the buffer's row 0 stands for, so a window onto a taller surface samples exactly as the whole would. [surface](api/surface.md)
+
+## 2026-10-13
+
+* `FbBuffer::__construct()` and `FbFormat::size()` refuse sides a 32-bit PHP cannot address, where the byte count used to wrap `size_t`; `blitRgba8()` and `paintRgba8()` check their image length in 64-bit arithmetic. No change on 64-bit. [surface](api/surface.md)
+
+## 2026-10-13
+
+* Version 0.10.5: `PHP_FB_VERSION` and the version test move from 0.10.0. README rewritten to the php-io-extensions template.

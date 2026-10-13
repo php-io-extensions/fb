@@ -5,7 +5,7 @@ description: Constants, FbFormat, FbBuffer: every method, what it refuses.
 resource: stubs/
 tags: [fb, pixels, c]
 status: draft
-generated: { by: claude-opus/5.5, at: 2026-10-04T01:13:30Z }
+generated: { by: claude-opus/5.5, at: 2026-10-13T12:41:50Z }
 sources:
   - id: stubs
     resource: stubs/
@@ -29,7 +29,7 @@ Refused (`ValueError`): unknown layout/order/scan; three-channel order on 32-bit
 
 # FbBuffer
 
-`__construct(FbFormat, width, height)`, sides 1..65535. Starts as `fill(0)`: zero bytes, inverted planar planes at 1.
+`__construct(FbFormat, width, height)`, sides 1..65535, and `(width + 8) × height × 4` at most `ZEND_LONG_MAX` (that product bounds every layout's bytes and its RGBA8 form; only a 32-bit PHP reaches it, from about 23166² up, and `FbFormat::size()` refuses the same sides). Starts as `fill(0)`: zero bytes, inverted planar planes at 1.
 
 | Call | Does |
 |---|---|

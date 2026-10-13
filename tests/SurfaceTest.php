@@ -45,7 +45,7 @@ it('exposes every constant, class and method the stubs declare', function (): vo
 });
 
 it('reports its version', function (): void {
-    expect(phpversion('fb'))->toBe('0.10.0');
+    expect(phpversion('fb'))->toBe('0.10.5');
 });
 
 it('declares final classes that cannot be cloned or serialized', function (string $class): void {

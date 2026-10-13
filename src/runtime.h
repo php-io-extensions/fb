@@ -52,4 +52,16 @@ static zend_always_inline int phpfb_narrow(zend_long value)
 	return value < 0 || value > INT_MAX ? -1 : (int) value;
 }
 
+/*
+ * Whether a width x height surface can be addressed: (width + 8) x height x 4
+ * bounds the bytes of every layout (planar's sixteen padded planes included)
+ * and of its RGBA8 form, and must fit a zend_long, which also bounds size_t.
+ * Always true on 64-bit; on 32-bit it refuses sides whose product would wrap
+ * an allocation.
+ */
+static zend_always_inline bool phpfb_addressable(zend_long width, zend_long height)
+{
+	return ((uint64_t) width + 8u) * (uint64_t) height * 4u <= (uint64_t) ZEND_LONG_MAX;
+}
+
 #endif

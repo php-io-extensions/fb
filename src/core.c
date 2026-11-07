@@ -719,12 +719,103 @@ static inline void fb_blend(const fb_format *f, uint8_t *bytes, int width, int h
 		(int) ((255 * a + (d & 0xFF) * (255 - a) + 127) / 255)));
 }
 
+/*
+ * One channel of fb_blend() for every destination level d: out[d] = (c * a + d * (255 - a) + 127) / 255,
+ * the same expression, so a lookup answers what the division does.
+ */
+static inline void fb_blend_table(uint32_t colour, uint32_t a, uint8_t out[256])
+{
+	for (uint32_t d = 0; d < 256; d++) {
+		out[d] = (uint8_t) ((colour * a + d * (255 - a) + 127) / 255);
+	}
+}
+
+/* Spans at least this long blend by table: building one costs about as much as blending this many pixels. */
+#define FB_TABLE_RUN 32
+
+/* The four channel tables of one alpha (red, green, blue, the alpha channel), and the grey table built from them. */
+typedef struct {
+	uint32_t a;          /* 256: none built yet */
+	uint8_t rgba[4][256];
+	int grey_ready;
+	uint8_t grey[256];   /* INDEX8 grey with 255 levels: stored level to stored level */
+} fb_blend_tables;
+
+static void fb_blend_tables_for(fb_blend_tables *t, uint32_t red, uint32_t green, uint32_t blue, uint32_t a)
+{
+	if (t->a == a) {
+		return;
+	}
+	fb_blend_table(red, a, t->rgba[0]);
+	fb_blend_table(green, a, t->rgba[1]);
+	fb_blend_table(blue, a, t->rgba[2]);
+	fb_blend_table(255, a, t->rgba[3]);
+	t->a = a;
+	t->grey_ready = 0;
+}
+
+/*
+ * A run of `length` pixels from (x, y), blended by table: the bytes fb_blend() writes. RGBA8888 and RGB888
+ * look their channel bytes up in place, and 8-bit grey its level; every other blending layout goes
+ * through the mapper, a lookup per channel in place of the division.
+ */
+static void fb_blend_run(const fb_format *f, uint8_t *bytes, int width, int height, int x, int y, int length, fb_blend_tables *t)
+{
+	const uint8_t *tr = t->rgba[0], *tg = t->rgba[1], *tb = t->rgba[2], *ta = t->rgba[3];
+
+	if (f->layout == FB_LAYOUT_RGBA8888) {
+		const uint8_t *at = fb_rgba_at[f->channel_order];
+		uint8_t *p = bytes + ((size_t) y * (size_t) width + (size_t) x) * 4;
+
+		for (int i = 0; i < length; i++, p += 4) {
+			p[at[0]] = tr[p[at[0]]];
+			p[at[1]] = tg[p[at[1]]];
+			p[at[2]] = tb[p[at[2]]];
+			p[at[3]] = ta[p[at[3]]];
+		}
+		return;
+	}
+	if (f->layout == FB_LAYOUT_RGB888) {
+		int r = f->channel_order == FB_CHANNELS_BGR ? 2 : 0, b = 2 - r;
+		uint8_t *p = bytes + ((size_t) y * (size_t) width + (size_t) x) * 3;
+
+		for (int i = 0; i < length; i++, p += 3) {
+			p[r] = tr[p[r]];
+			p[1] = tg[p[1]];
+			p[b] = tb[p[b]];
+		}
+		return;
+	}
+	if (f->layout == FB_LAYOUT_INDEX8 && f->mode == FB_MODE_GREY) {
+		/* a stored level v reads as grey v (fb_widen at 255 levels), so the level answers through the tables and fb_map */
+		if (!t->grey_ready) {
+			for (int v = 0; v < 256; v++) {
+				t->grey[v] = (uint8_t) fb_map(f, tr[v], tg[v], tb[v], ta[255]);
+			}
+			t->grey_ready = 1;
+		}
+		uint8_t *p = bytes + (size_t) y * (size_t) width + (size_t) x;
+
+		for (int i = 0; i < length; i++) {
+			p[i] = t->grey[p[i]];
+		}
+		return;
+	}
+	for (int px = x; px < x + length; px++) {
+		uint32_t d = fb_unmap(f, fb_get(f, bytes, width, height, px, y));
+
+		fb_set(f, bytes, width, height, px, y, fb_map(f, tr[d >> 24], tg[(d >> 16) & 0xFF], tb[(d >> 8) & 0xFF], ta[d & 0xFF]));
+	}
+}
+
 void fb_paint_spans(const fb_format *f, uint8_t *bytes, int width, int height, const uint8_t *spans, size_t count, uint32_t rgba)
 {
 	uint32_t red = rgba >> 24, green = (rgba >> 16) & 0xFF, blue = (rgba >> 8) & 0xFF, alpha = rgba & 0xFF;
 	uint32_t word = fb_map(f, (int) red, (int) green, (int) blue, (int) alpha);
 	int blends = f->mode == FB_MODE_RGB || f->mode == FB_MODE_GREY;
+	fb_blend_tables tables;
 
+	tables.a = 256;
 	for (size_t i = 0; i < count; i++) {
 		const uint8_t *p = spans + i * FB_SPAN_BYTES;
 		int y = p[0] | (p[1] << 8), x = p[2] | (p[3] << 8), length = p[4] | (p[5] << 8);
@@ -735,6 +826,11 @@ void fb_paint_spans(const fb_format *f, uint8_t *bytes, int width, int height, c
 		}
 		if (a == 255 || !blends) {
 			fb_fill_rect(f, bytes, width, height, (fb_rect) {x, y, length, 1}, word);
+			continue;
+		}
+		if (length >= FB_TABLE_RUN) {
+			fb_blend_tables_for(&tables, red, green, blue, a);
+			fb_blend_run(f, bytes, width, height, x, y, length, &tables);
 			continue;
 		}
 		for (int px = x; px < x + length; px++) {
@@ -754,13 +850,19 @@ void fb_paint_rgba8(const fb_format *f, uint8_t *bytes, int width, int height, c
 	double ia = inverse[0], ib = inverse[1], ic = inverse[2], id = inverse[3], ie = inverse[4], jf = inverse[5];
 	int blends = f->mode == FB_MODE_RGB || f->mode == FB_MODE_GREY;
 
+	int in_place = f->layout == FB_LAYOUT_RGBA8888;
+	const uint8_t *at = fb_rgba_at[f->channel_order];
+
 	for (int y = target.y; y < target.y + target.height; y++) {
 		double py = (double) (y + row) + 0.5;
+		/* the y products, hoisted: (ia * px + cy) + ie is today's sum, term for term (a running sum over x is not) */
+		double cy = ic * py, dy = id * py;
+		uint8_t *line = bytes + (size_t) y * (size_t) width * 4;
 
 		for (int x = target.x; x < target.x + target.width; x++) {
 			double px = (double) x + 0.5;
-			double u = ia * px + ic * py + ie;
-			double v = ib * px + id * py + jf;
+			double u = ia * px + cy + ie;
+			double v = ib * px + dy + jf;
 			uint32_t red, green, blue, alpha;
 
 			if (!(u >= 0 && u < (double) source_width && v >= 0 && v < (double) source_height)) {
@@ -803,7 +905,19 @@ void fb_paint_rgba8(const fb_format *f, uint8_t *bytes, int width, int height, c
 				alpha = (uint32_t) ((sum + 32768) >> 16);
 			}
 
-			fb_blend(f, bytes, width, height, x, y, red, green, blue, (alpha * (uint32_t) opacity + 127) / 255, blends);
+			uint32_t ea = (alpha * (uint32_t) opacity + 127) / 255;
+
+			if (in_place && ea != 0 && ea != 255) {
+				/* fb_blend() on a 32-bit pixel, on its bytes: unmap and map are the channel bytes themselves */
+				uint8_t *q = line + (size_t) x * 4;
+
+				q[at[0]] = (uint8_t) ((red * ea + q[at[0]] * (255 - ea) + 127) / 255);
+				q[at[1]] = (uint8_t) ((green * ea + q[at[1]] * (255 - ea) + 127) / 255);
+				q[at[2]] = (uint8_t) ((blue * ea + q[at[2]] * (255 - ea) + 127) / 255);
+				q[at[3]] = (uint8_t) ((255 * ea + q[at[3]] * (255 - ea) + 127) / 255);
+				continue;
+			}
+			fb_blend(f, bytes, width, height, x, y, red, green, blue, ea, blends);
 		}
 	}
 }

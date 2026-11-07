@@ -1,5 +1,10 @@
 # Log
 
+## 2026-11-05
+
+* `paintSpans()` blends spans of 32 pixels or more by table (`fb_blend_table()`: the per-pixel expression for all 256 destination levels, one 1 KB slot rebuilt when the alpha changes); `paintRgba8()` hoists the row pointer and the inverse's y products and blends RGBA8888 on its bytes. No API change; byte-identical to 0.11.0 by `tests/Fixtures/blend.json` (1636 scenarios, `capture.php`). 1800×1280 RGBA8: a full-surface translucent span 20.9 → 3.7 ms, a full-size `paintRgba8` 24.6 → 11.0 ms. A running sum for the sample point moves the last bit and was not taken.
+* Tests may hold a captured fixture (`tests/Fixtures/`) where today's build is the reference.
+
 ## 2026-10-28
 
 * **Version**: 0.11.0 in `PHP_FB_VERSION` (`php_fb.h`); `branch-alias` `dev-main` is `0.11.x-dev`. Promoted with the Venusian 0.11 ecosystem. No API or behaviour change. Built and loaded on Homebrew PHP 8.4 NTS and ZTS, the Pi on 8.4 ZTS and an x86_64 8.4 NTS box: 975 passed, 1 skipped on each.

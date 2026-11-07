@@ -539,14 +539,95 @@ ZEND_METHOD(FbBuffer, paintSpans)
 	phpfb_return_rect(return_value, (fb_rect) {left, top, right - left, bottom - top});
 }
 
+ZEND_METHOD(FbBuffer, paintGradient)
+{
+	zend_string *spans, *ramp;
+	bool radial;
+	zend_long spread, row = 0;
+	HashTable *inverse_list;
+
+	ZEND_PARSE_PARAMETERS_START(5, 6)
+		Z_PARAM_STR(spans)
+		Z_PARAM_STR(ramp)
+		Z_PARAM_BOOL(radial)
+		Z_PARAM_LONG(spread)
+		Z_PARAM_ARRAY_HT(inverse_list)
+		Z_PARAM_OPTIONAL
+		Z_PARAM_LONG(row)
+	ZEND_PARSE_PARAMETERS_END();
+	PHPFB_THIS_BUFFER(self);
+
+	if (ZSTR_LEN(ramp) != 1024) {
+		zend_argument_value_error(2, "must be 256 RGBA8 colours (1024 bytes), %zu given", ZSTR_LEN(ramp));
+		RETURN_THROWS();
+	}
+	if (spread < 0 || spread > 2) {
+		zend_argument_value_error(4, "must be 0 (pad), 1 (repeat) or 2 (reflect)");
+		RETURN_THROWS();
+	}
+	if (row < 0 || row > FB_MAX_SIDE) {
+		zend_argument_value_error(6, "must be between 0 and %d", FB_MAX_SIDE);
+		RETURN_THROWS();
+	}
+	double inverse[6];
+	uint32_t number = 0;
+	zval *entry;
+	if (!zend_array_is_list(inverse_list) || zend_hash_num_elements(inverse_list) != 6) {
+		zend_argument_value_error(5, "must be a list of six finite numbers");
+		RETURN_THROWS();
+	}
+	ZEND_HASH_FOREACH_VAL(inverse_list, entry) {
+		ZVAL_DEREF(entry);
+		if (Z_TYPE_P(entry) == IS_LONG) {
+			inverse[number] = (double) Z_LVAL_P(entry);
+		} else if (Z_TYPE_P(entry) == IS_DOUBLE && zend_finite(Z_DVAL_P(entry))) {
+			inverse[number] = Z_DVAL_P(entry);
+		} else {
+			zend_argument_value_error(5, "must be a list of six finite numbers");
+			RETURN_THROWS();
+		}
+		number++;
+	} ZEND_HASH_FOREACH_END();
+	if (ZSTR_LEN(spans) % FB_SPAN_BYTES != 0) {
+		zend_value_error("A span list is a whole number of %d-byte spans, got %zu bytes.", FB_SPAN_BYTES, ZSTR_LEN(spans));
+		RETURN_THROWS();
+	}
+
+	/* Every span is checked before any is painted. */
+	size_t count = ZSTR_LEN(spans) / FB_SPAN_BYTES;
+	const uint8_t *bytes = (const uint8_t *) ZSTR_VAL(spans);
+	int left = INT_MAX, top = INT_MAX, right = INT_MIN, bottom = INT_MIN;
+	for (size_t i = 0; i < count; i++) {
+		const uint8_t *p = bytes + i * FB_SPAN_BYTES;
+		int y = p[0] | (p[1] << 8), x = p[2] | (p[3] << 8), length = p[4] | (p[5] << 8);
+
+		if (length < 1 || y >= self->height || length > self->width - x) {
+			zend_value_error("Span %zu is empty or not inside a %dx%d framebuffer.", i, self->width, self->height);
+			RETURN_THROWS();
+		}
+		left = MIN(left, x);
+		top = MIN(top, y);
+		right = MAX(right, x + length);
+		bottom = MAX(bottom, y + 1);
+	}
+	if (count == 0) {
+		RETURN_NULL();
+	}
+
+	fb_paint_gradient(&self->format, self->bytes, self->width, self->height, bytes, count, (const uint8_t *) ZSTR_VAL(ramp), radial, (int) spread, inverse, (int) row);
+	phpfb_return_rect(return_value, (fb_rect) {left, top, right - left, bottom - top});
+}
+
 ZEND_METHOD(FbBuffer, paintRgba8)
 {
 	zend_string *rgba8;
 	HashTable *inverse_list;
-	zend_long width, height, x, y, target_width, target_height, opacity = 255, row = 0;
+	zend_long width, height, x, y, target_width, target_height, opacity = 255, row = 0, tint = (zend_long) UINT32_MAX;
 	bool smooth = false;
+	HashTable *window_list = NULL;
+	zend_string *coverage = NULL;
 
-	ZEND_PARSE_PARAMETERS_START(8, 11)
+	ZEND_PARSE_PARAMETERS_START(8, 14)
 		Z_PARAM_STR(rgba8)
 		Z_PARAM_LONG(width)
 		Z_PARAM_LONG(height)
@@ -559,6 +640,9 @@ ZEND_METHOD(FbBuffer, paintRgba8)
 		Z_PARAM_LONG(opacity)
 		Z_PARAM_BOOL(smooth)
 		Z_PARAM_LONG(row)
+		Z_PARAM_LONG(tint)
+		Z_PARAM_ARRAY_HT_OR_NULL(window_list)
+		Z_PARAM_STR_OR_NULL(coverage)
 	ZEND_PARSE_PARAMETERS_END();
 	PHPFB_THIS_BUFFER(self);
 
@@ -610,8 +694,66 @@ ZEND_METHOD(FbBuffer, paintRgba8)
 		RETURN_THROWS();
 	}
 
+	if (tint < 0 || tint > (zend_long) UINT32_MAX) {
+		zend_argument_value_error(12, "must be a colour 0xRRGGBBAA");
+		RETURN_THROWS();
+	}
+
+	double window[4];
+	if (window_list != NULL) {
+		uint32_t seen = 0;
+		if (!zend_array_is_list(window_list) || zend_hash_num_elements(window_list) != 4) {
+			zend_argument_value_error(13, "must be a list of four finite numbers [u0, v0, u1, v1]");
+			RETURN_THROWS();
+		}
+		ZEND_HASH_FOREACH_VAL(window_list, entry) {
+			ZVAL_DEREF(entry);
+			if (Z_TYPE_P(entry) == IS_LONG) {
+				window[seen] = (double) Z_LVAL_P(entry);
+			} else if (Z_TYPE_P(entry) == IS_DOUBLE && zend_finite(Z_DVAL_P(entry))) {
+				window[seen] = Z_DVAL_P(entry);
+			} else {
+				zend_argument_value_error(13, "must be a list of four finite numbers [u0, v0, u1, v1]");
+				RETURN_THROWS();
+			}
+			seen++;
+		} ZEND_HASH_FOREACH_END();
+		if (!(window[0] < window[2] && window[1] < window[3])) {
+			zend_argument_value_error(13, "must have u0 < u1 and v0 < v1");
+			RETURN_THROWS();
+		}
+	}
+
+	size_t mask_count = 0;
+	if (coverage != NULL) {
+		if (ZSTR_LEN(coverage) % FB_SPAN_BYTES != 0) {
+			zend_argument_value_error(14, "must be a whole number of %d-byte spans, got %zu bytes", FB_SPAN_BYTES, ZSTR_LEN(coverage));
+			RETURN_THROWS();
+		}
+		/* Every span is checked before any pixel is painted: inside the buffer, rows ascending, x ascending without overlap. */
+		mask_count = ZSTR_LEN(coverage) / FB_SPAN_BYTES;
+		const uint8_t *spans = (const uint8_t *) ZSTR_VAL(coverage);
+		int last_y = -1, last_end = 0;
+		for (size_t i = 0; i < mask_count; i++) {
+			const uint8_t *p = spans + i * FB_SPAN_BYTES;
+			int sy = p[0] | (p[1] << 8), sx = p[2] | (p[3] << 8), length = p[4] | (p[5] << 8);
+
+			if (length < 1 || sy >= self->height || length > self->width - sx) {
+				zend_argument_value_error(14, "has span %zu empty or not inside a %dx%d framebuffer", i, self->width, self->height);
+				RETURN_THROWS();
+			}
+			if (sy < last_y || (sy == last_y && sx < last_end)) {
+				zend_argument_value_error(14, "has span %zu out of order: rows ascend, and x ascends without overlap within a row", i);
+				RETURN_THROWS();
+			}
+			last_y = sy;
+			last_end = sx + length;
+		}
+	}
+
 	fb_paint_rgba8(&self->format, self->bytes, self->width, self->height, (const uint8_t *) ZSTR_VAL(rgba8), (int) width, (int) height,
-		inverse, (fb_rect) {(int) x, (int) y, (int) target_width, (int) target_height}, (int) opacity, smooth, (int) row);
+		inverse, (fb_rect) {(int) x, (int) y, (int) target_width, (int) target_height}, (int) opacity, smooth, (int) row,
+		(uint32_t) tint, window_list != NULL ? window : NULL, coverage != NULL ? (const uint8_t *) ZSTR_VAL(coverage) : NULL, mask_count);
 }
 
 ZEND_METHOD(FbBuffer, pointer)

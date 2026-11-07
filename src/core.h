@@ -114,6 +114,17 @@ void fb_plane(const fb_format *format, const uint8_t *bytes, int width, int heig
 void fb_paint_spans(const fb_format *format, uint8_t *bytes, int width, int height, const uint8_t *spans, size_t count, uint32_t rgba);
 
 /*
+ * Paint a gradient through `count` spans (FB_SPAN_BYTES each, y, x, length uint16 LE, coverage uint8), every one
+ * already checked to lie inside. `ramp` is 256 colours of 4 bytes, RGBA, straight alpha. The point (u, v) =
+ * (ia*x + ic*y + ie, ib*x + id*y + if) at a pixel's centre (y counted from `row`, a larger surface's row for this
+ * buffer's row 0) gives t = u, or hypot(u, v) when `radial`; `spread` 0 pad, 1 repeat, 2 reflect folds t into 0..1;
+ * the colour is ramp[floor(t * 255 + 0.5)]. u and v are worked out at a span's first pixel and then stepped by ia and
+ * ib, so a pixel costs two additions. Blended like a span, alpha = (ramp alpha * coverage + 127) / 255.
+ */
+void fb_paint_gradient(const fb_format *format, uint8_t *bytes, int width, int height, const uint8_t *spans, size_t count,
+	const uint8_t *ramp, int radial, int spread, const double inverse[6], int row);
+
+/*
  * Paint RGBA8 pixels (`source_width` x `source_height`, straight alpha) through an
  * inverse placement. For each pixel of `target`, a rect inside the buffer, the point
  * (u, v) = (ia*x + ic*y + ie, ib*x + id*y + if) at the pixel's centre picks the source
@@ -121,8 +132,17 @@ void fb_paint_spans(const fb_format *format, uint8_t *bytes, int width, int heig
  * around it (weights in 1/256ths, colours weighed by alpha, edges held). It is blended
  * like a span, with alpha = (source alpha * opacity + 127) / 255. `row` is the row of a
  * larger surface this buffer's row 0 stands for: y counts from there.
+ *
+ * Three more parts change each sampled pixel, in this order, each (x * y + 127) / 255:
+ * `tint` (0xRRGGBBAA) is multiplied into every channel, alpha too; then the opacity; then,
+ * with a mask, the coverage of the span that holds the pixel (a pixel no span holds is
+ * skipped). `window` (NULL: none) is {u0, v0, u1, v1}: only pixels whose point lies inside
+ * it are painted; smooth sampling still reads the whole image. The mask is `mask_count`
+ * 7-byte spans (y, x, length uint16 LE, coverage), rows ascending and x ascending within a
+ * row without overlap, every span inside the buffer, in the buffer's own rows.
  */
 void fb_paint_rgba8(const fb_format *format, uint8_t *bytes, int width, int height, const uint8_t *rgba8, int source_width, int source_height,
-	const double inverse[6], fb_rect target, int opacity, int smooth, int row);
+	const double inverse[6], fb_rect target, int opacity, int smooth, int row, uint32_t tint, const double *window,
+	const uint8_t *mask, size_t mask_count);
 
 #endif

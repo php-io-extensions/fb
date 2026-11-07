@@ -87,18 +87,40 @@ final class FbBuffer
     public function paintSpans(string $spans, int $rgba): ?array {}
 
     /**
+     * Paint a gradient through spans (7 bytes each: y, x, length uint16 LE,
+     * coverage uint8; all inside the buffer, checked before any is painted).
+     * The point (u, v) = (a·x + c·y + e, b·x + d·y + f) at a pixel's centre
+     * gives t = u, or hypot(u, v) when $radial; $spread folds t into 0..1; the
+     * colour is $ramp[floor(t × 255 + ½)]. u and v are worked out at a span's
+     * first pixel and stepped along it. Blended like a span, alpha = ramp
+     * alpha × coverage.
+     *
+     * @param string $ramp 256 colours of 4 bytes, RGBA, straight alpha.
+     * @param int $spread 0 pad, 1 repeat, 2 reflect.
+     * @param array $inverse [a, b, c, d, e, f], six finite numbers.
+     * @param int $row The row of a larger surface this buffer's row 0 stands for (0..65535): y counts from there.
+     * @return array|null [x, y, width, height] of the spans; null for none.
+     */
+    public function paintGradient(string $spans, string $ramp, bool $radial, int $spread, array $inverse, int $row = 0): ?array {}
+
+    /**
      * Paint RGBA8 pixels (straight alpha) through an inverse placement. For
      * each pixel of the target rect, which must lie inside the buffer, the
      * point (u, v) = (a·x + c·y + e, b·x + d·y + f) at the pixel's centre picks
      * the source pixel when it lies inside the image: the one under it, or with
      * $smooth the four around it (colours weighed by alpha, edges held). It is
-     * blended like a span, with alpha = source alpha × opacity.
+     * blended like a span, with alpha = source alpha × opacity. Each sampled
+     * pixel first takes $tint (alpha too) and, last, the coverage of its mask
+     * span, each (x × y + 127) / 255.
      *
      * @param array $inverse [a, b, c, d, e, f], six finite numbers.
      * @param int $opacity 0..255
      * @param int $row The row of a larger surface this buffer's row 0 stands for (0..65535): y counts from there.
+     * @param int $tint 0xRRGGBBAA multiplied into every sampled pixel, alpha included; 0xFFFFFFFF changes nothing.
+     * @param array|null $window [u0, v0, u1, v1] in image pixels, u0 < u1 and v0 < v1: only pixels whose point lies inside it are painted (smooth sampling still reads the whole image).
+     * @param string|null $coverage Spans (7 bytes each: y, x, length uint16 LE, coverage uint8) in this buffer's rows, rows ascending and x ascending without overlap, all inside the buffer: a pixel's alpha is scaled by its span's coverage, and a pixel no span holds is not painted.
      */
-    public function paintRgba8(string $rgba8, int $width, int $height, array $inverse, int $x, int $y, int $targetWidth, int $targetHeight, int $opacity = 255, bool $smooth = false, int $row = 0): void {}
+    public function paintRgba8(string $rgba8, int $width, int $height, array $inverse, int $x, int $y, int $targetWidth, int $targetHeight, int $opacity = 255, bool $smooth = false, int $row = 0, int $tint = 0xFFFFFFFF, ?array $window = null, ?string $coverage = null): void {}
 
     /** The address of the bytes, valid while this object lives. */
     public function pointer(): int {}

@@ -839,13 +839,52 @@ void fb_paint_spans(const fb_format *f, uint8_t *bytes, int width, int height, c
 	}
 }
 
+void fb_paint_gradient(const fb_format *f, uint8_t *bytes, int width, int height, const uint8_t *spans, size_t count,
+	const uint8_t *ramp, int radial, int spread, const double inverse[6], int row)
+{
+	const double ia = inverse[0], ib = inverse[1], ic = inverse[2], id = inverse[3], ie = inverse[4], iff = inverse[5];
+	int blends = f->mode == FB_MODE_RGB || f->mode == FB_MODE_GREY;
+
+	for (size_t i = 0; i < count; i++) {
+		const uint8_t *p = spans + i * FB_SPAN_BYTES;
+		int y = p[0] | (p[1] << 8), x = p[2] | (p[3] << 8), length = p[4] | (p[5] << 8);
+		uint32_t cover = p[6];
+		double py = (double) (y + row) + 0.5;
+		double u = ia * ((double) x + 0.5) + ic * py + ie;
+		double v = ib * ((double) x + 0.5) + id * py + iff;
+
+		for (int k = 0; k < length; k++, u += ia, v += ib) {
+			double t = radial ? hypot(u, v) : u;
+
+			if (spread == 0) {
+				t = t < 0.0 ? 0.0 : (t > 1.0 ? 1.0 : t);
+			} else if (spread == 1) {
+				t = t - floor(t);
+			} else {
+				double m = t - 2.0 * floor(t / 2.0);
+
+				t = m > 1.0 ? 2.0 - m : m;
+			}
+			double entry = floor(t * 255 + 0.5);
+			const uint8_t *c = ramp + (entry >= 0.0 ? (entry > 255.0 ? 255 : (int) entry) : 0) * 4;
+			uint32_t a = c[3];
+
+			if (cover != 255) {
+				a = (a * cover + 127) / 255;
+			}
+			fb_blend(f, bytes, width, height, x + k, y, c[0], c[1], c[2], a, blends);
+		}
+	}
+}
+
 static inline int fb_clamp_int(int value, int low, int high)
 {
 	return value < low ? low : (value > high ? high : value);
 }
 
 void fb_paint_rgba8(const fb_format *f, uint8_t *bytes, int width, int height, const uint8_t *rgba8, int source_width, int source_height,
-	const double inverse[6], fb_rect target, int opacity, int smooth, int row)
+	const double inverse[6], fb_rect target, int opacity, int smooth, int row, uint32_t tint, const double *window,
+	const uint8_t *mask, size_t mask_count)
 {
 	double ia = inverse[0], ib = inverse[1], ic = inverse[2], id = inverse[3], ie = inverse[4], jf = inverse[5];
 	int blends = f->mode == FB_MODE_RGB || f->mode == FB_MODE_GREY;
@@ -853,7 +892,27 @@ void fb_paint_rgba8(const fb_format *f, uint8_t *bytes, int width, int height, c
 	int in_place = f->layout == FB_LAYOUT_RGBA8888;
 	const uint8_t *at = fb_rgba_at[f->channel_order];
 
+	int tinted = tint != 0xFFFFFFFFu;
+	uint32_t tint_red = (tint >> 24) & 0xFF, tint_green = (tint >> 16) & 0xFF, tint_blue = (tint >> 8) & 0xFF, tint_alpha = tint & 0xFF;
+	/* the mask's spans are in row order: this cursor only moves forward, to the first span of the row or past it */
+	size_t row_first = 0;
+
 	for (int y = target.y; y < target.y + target.height; y++) {
+		size_t run = 0, row_end = 0;
+
+		if (mask != NULL) {
+			while (row_first < mask_count && (mask[row_first * FB_SPAN_BYTES] | (mask[row_first * FB_SPAN_BYTES + 1] << 8)) < y) {
+				row_first++;
+			}
+			row_end = row_first;
+			while (row_end < mask_count && (mask[row_end * FB_SPAN_BYTES] | (mask[row_end * FB_SPAN_BYTES + 1] << 8)) == y) {
+				row_end++;
+			}
+			if (row_first == row_end) {
+				continue;
+			}
+			run = row_first;
+		}
 		double py = (double) (y + row) + 0.5;
 		/* the y products, hoisted: (ia * px + cy) + ie is today's sum, term for term (a running sum over x is not) */
 		double cy = ic * py, dy = id * py;
@@ -867,6 +926,29 @@ void fb_paint_rgba8(const fb_format *f, uint8_t *bytes, int width, int height, c
 
 			if (!(u >= 0 && u < (double) source_width && v >= 0 && v < (double) source_height)) {
 				continue;
+			}
+			if (window != NULL && !(u >= window[0] && u < window[2] && v >= window[1] && v < window[3])) {
+				continue;
+			}
+			uint32_t cover = 255;
+			if (mask != NULL) {
+				while (run < row_end) {
+					const uint8_t *s = mask + run * FB_SPAN_BYTES;
+
+					if ((s[2] | (s[3] << 8)) + (s[4] | (s[5] << 8)) > x) {
+						break;
+					}
+					run++;
+				}
+				if (run >= row_end) {
+					continue;
+				}
+				const uint8_t *s = mask + run * FB_SPAN_BYTES;
+
+				if ((s[2] | (s[3] << 8)) > x) {
+					continue;
+				}
+				cover = s[6];
 			}
 
 			if (!smooth) {
@@ -905,7 +987,16 @@ void fb_paint_rgba8(const fb_format *f, uint8_t *bytes, int width, int height, c
 				alpha = (uint32_t) ((sum + 32768) >> 16);
 			}
 
+			if (tinted) {
+				red = (red * tint_red + 127) / 255;
+				green = (green * tint_green + 127) / 255;
+				blue = (blue * tint_blue + 127) / 255;
+				alpha = (alpha * tint_alpha + 127) / 255;
+			}
 			uint32_t ea = (alpha * (uint32_t) opacity + 127) / 255;
+			if (cover != 255) {
+				ea = (ea * cover + 127) / 255;
+			}
 
 			if (in_place && ea != 0 && ea != 255) {
 				/* fb_blend() on a 32-bit pixel, on its bytes: unmap and map are the channel bytes themselves */

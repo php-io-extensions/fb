@@ -1,5 +1,5 @@
 /* This is a generated file, edit the .stub.php file instead.
- * Stub hash: 74afea39fc6ae43d304a86f07d86df0eabf5ab25 */
+ * Stub hash: f8fee8ae93fd75a50a4cfaa134e5baebabb398fc */
 
 ZEND_BEGIN_ARG_INFO_EX(arginfo_class_FbBuffer___construct, 0, 0, 3)
 	ZEND_ARG_OBJ_INFO(0, format, FbFormat, 0)
@@ -95,6 +95,15 @@ ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_class_FbBuffer_paintSpans, 0, 2,
 	ZEND_ARG_TYPE_INFO(0, rgba, IS_LONG, 0)
 ZEND_END_ARG_INFO()
 
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_class_FbBuffer_paintGradient, 0, 5, IS_ARRAY, 1)
+	ZEND_ARG_TYPE_INFO(0, spans, IS_STRING, 0)
+	ZEND_ARG_TYPE_INFO(0, ramp, IS_STRING, 0)
+	ZEND_ARG_TYPE_INFO(0, radial, _IS_BOOL, 0)
+	ZEND_ARG_TYPE_INFO(0, spread, IS_LONG, 0)
+	ZEND_ARG_TYPE_INFO(0, inverse, IS_ARRAY, 0)
+	ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, row, IS_LONG, 0, "0")
+ZEND_END_ARG_INFO()
+
 ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_class_FbBuffer_paintRgba8, 0, 8, IS_VOID, 0)
 	ZEND_ARG_TYPE_INFO(0, rgba8, IS_STRING, 0)
 	ZEND_ARG_TYPE_INFO(0, width, IS_LONG, 0)
@@ -107,6 +116,9 @@ ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_class_FbBuffer_paintRgba8, 0, 8,
 	ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, opacity, IS_LONG, 0, "255")
 	ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, smooth, _IS_BOOL, 0, "false")
 	ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, row, IS_LONG, 0, "0")
+	ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, tint, IS_LONG, 0, "0xffffffff")
+	ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, window, IS_ARRAY, 1, "null")
+	ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, coverage, IS_STRING, 1, "null")
 ZEND_END_ARG_INFO()
 
 #define arginfo_class_FbBuffer_pointer arginfo_class_FbBuffer_width
@@ -133,6 +145,7 @@ ZEND_METHOD(FbBuffer, blitRgba8);
 ZEND_METHOD(FbBuffer, copy);
 ZEND_METHOD(FbBuffer, plane);
 ZEND_METHOD(FbBuffer, paintSpans);
+ZEND_METHOD(FbBuffer, paintGradient);
 ZEND_METHOD(FbBuffer, paintRgba8);
 ZEND_METHOD(FbBuffer, pointer);
 ZEND_METHOD(FbBuffer, granularity);
@@ -157,6 +170,7 @@ static const zend_function_entry class_FbBuffer_methods[] = {
 	ZEND_ME(FbBuffer, copy, arginfo_class_FbBuffer_copy, ZEND_ACC_PUBLIC)
 	ZEND_ME(FbBuffer, plane, arginfo_class_FbBuffer_plane, ZEND_ACC_PUBLIC)
 	ZEND_ME(FbBuffer, paintSpans, arginfo_class_FbBuffer_paintSpans, ZEND_ACC_PUBLIC)
+	ZEND_ME(FbBuffer, paintGradient, arginfo_class_FbBuffer_paintGradient, ZEND_ACC_PUBLIC)
 	ZEND_ME(FbBuffer, paintRgba8, arginfo_class_FbBuffer_paintRgba8, ZEND_ACC_PUBLIC)
 	ZEND_ME(FbBuffer, pointer, arginfo_class_FbBuffer_pointer, ZEND_ACC_PUBLIC)
 	ZEND_ME(FbBuffer, granularity, arginfo_class_FbBuffer_granularity, ZEND_ACC_PUBLIC)

@@ -274,6 +274,95 @@ it('counts rows from the surface row its own row 0 stands for', function (): voi
     expect(bin2hex($window->bytes()))->toBe('0000ffff'.'ffffffff');
 });
 
+it('multiplies a tint into each channel, alpha included, then the opacity, then the coverage of the mask span', function (): void {
+    $tinted = buffer(FB_LAYOUT_RGBA8888, 1, 1);
+    // (255, 128, 0, 255) × (128, 255, 0, 128) = (128, 128, 0, 128); over nothing at alpha 128: 64, 64, 0
+    $tinted->paintRgba8(hex2bin('ff8000ff'), 1, 1, [1, 0, 0, 1, 0, 0], 0, 0, 1, 1, 255, false, 0, 0x80ff0080);
+    $opaque = buffer(FB_LAYOUT_RGBA8888, 1, 1);
+    // alpha 255 × 128 → 128, × the opacity 128 → 64
+    $opaque->paintRgba8(hex2bin('ffffffff'), 1, 1, [1, 0, 0, 1, 0, 0], 0, 0, 1, 1, 128, false, 0, 0xffffff80);
+    $masked = buffer(FB_LAYOUT_RGBA8888, 3, 1);
+    $masked->paintRgba8(hex2bin('ffffffff'.'ffffffff'.'ffffffff'), 3, 1, [1, 0, 0, 1, 0, 0], 0, 0, 3, 1, 255, false, 0, 0xFFFFFFFF, null, spanBytes([0, 1, 1, 128], [0, 2, 1, 255]));
+    $nothing = buffer(FB_LAYOUT_RGBA8888, 1, 1);
+    $nothing->paintRgba8(hex2bin('ffffffff'), 1, 1, [1, 0, 0, 1, 0, 0], 0, 0, 1, 1, 255, false, 0, 0xffffff00);
+
+    expect(bin2hex($tinted->bytes()))->toBe('40400080')
+        ->and(bin2hex($opaque->bytes()))->toBe('40404040')
+        ->and(bin2hex($masked->bytes()))->toBe('00000000'.'80808080'.'ffffffff')
+        ->and(bin2hex($nothing->bytes()))->toBe('00000000');
+});
+
+it('paints only the window, though smooth sampling still reads beside it', function (): void {
+    $cropped = buffer(FB_LAYOUT_RGBA8888, 4, 1);
+    $cropped->paintRgba8(hex2bin('ff0000ff'.'00ff00ff'), 2, 1, [0.5, 0, 0, 1, 0, 0], 0, 0, 4, 1, 255, false, 0, 0xFFFFFFFF, [1, 0, 2, 1]);
+    $smooth = buffer(FB_LAYOUT_RGBA8888, 4, 1);
+    $smooth->paintRgba8(hex2bin('000000ff'.'ffffffff'), 2, 1, [0.5, 0, 0, 1, 0, 0], 0, 0, 4, 1, 255, true, 0, 0xFFFFFFFF, [1.0, 0.0, 2.0, 1.0]);
+
+    expect(bin2hex($cropped->bytes()))->toBe('00000000'.'00000000'.'00ff00ff'.'00ff00ff')
+        ->and(bin2hex($smooth->bytes()))->toBe('00000000'.'00000000'.'bfbfbfff'.'ffffffff');
+});
+
+it('refuses a malformed tint, window or mask, painting nothing', function (): void {
+    $buffer = buffer(FB_LAYOUT_RGBA8888, 4, 2);
+    $pixel = "\xff\xff\xff\xff";
+    $identity = [1, 0, 0, 1, 0, 0];
+    $paint = fn (int $tint = 0xFFFFFFFF, ?array $window = null, ?string $coverage = null) => $buffer->paintRgba8($pixel, 1, 1, $identity, 0, 0, 1, 1, 255, false, 0, $tint, $window, $coverage);
+
+    expect(fn () => $paint(-1))->toThrow(ValueError::class, 'must be a colour 0xRRGGBBAA')
+        ->and(fn () => $paint(0x100000000))->toThrow(ValueError::class, 'must be a colour 0xRRGGBBAA')
+        ->and(fn () => $paint(0xFFFFFFFF, [0, 0, 1]))->toThrow(ValueError::class, 'four finite numbers')
+        ->and(fn () => $paint(0xFFFFFFFF, [0, 0, 1, NAN]))->toThrow(ValueError::class, 'four finite numbers')
+        ->and(fn () => $paint(0xFFFFFFFF, [1, 0, 1, 1]))->toThrow(ValueError::class, 'u0 < u1 and v0 < v1')
+        ->and(fn () => $paint(0xFFFFFFFF, null, 'short'))->toThrow(ValueError::class, 'whole number of 7-byte spans')
+        ->and(fn () => $paint(0xFFFFFFFF, null, spanBytes([0, 3, 2, 255])))->toThrow(ValueError::class, 'not inside a 4x2 framebuffer')
+        ->and(fn () => $paint(0xFFFFFFFF, null, spanBytes([2, 0, 1, 255])))->toThrow(ValueError::class, 'not inside a 4x2 framebuffer')
+        ->and(fn () => $paint(0xFFFFFFFF, null, spanBytes([1, 0, 1, 255], [0, 0, 1, 255])))->toThrow(ValueError::class, 'out of order')
+        ->and(fn () => $paint(0xFFFFFFFF, null, spanBytes([0, 1, 2, 255], [0, 2, 1, 255])))->toThrow(ValueError::class, 'out of order')
+        ->and(bin2hex($buffer->bytes()))->toBe(str_repeat('00', 32));
+});
+
+it('paints a gradient through spans: the ramp entry of floor(t × 255 + ½), the position stepped along the span', function (): void {
+    // a ramp whose entry i is (i, 255 - i, 0, 255)
+    $ramp = '';
+    for ($i = 0; $i < 256; $i++) {
+        $ramp .= chr($i).chr(255 - $i)."\0\xff";
+    }
+    $buffer = new FbBuffer(new FbFormat(FB_LAYOUT_RGBA8888, channelOrder: FB_CHANNELS_RGBA), 4, 2);
+    // linear, t = x / 4 + 0.125: pixel centres 0.5, 1.5, 2.5, 3.5 give t = 0.25, 0.5, 0.75, 1.0 on row 0
+    $rect = $buffer->paintGradient(spanBytes([0, 0, 4, 255]), $ramp, false, 0, [0.25, 0, 0, 0, 0.125, 0]);
+    $row = array_map('hexdec', str_split(bin2hex(substr($buffer->bytes(), 0, 16)), 2));
+
+    expect($rect)->toBe([0, 0, 4, 1])
+        ->and($row)->toBe([64, 191, 0, 255, 128, 127, 0, 255, 191, 64, 0, 255, 255, 0, 0, 255])
+        ->and(bin2hex(substr($buffer->bytes(), 16)))->toBe(str_repeat('00', 16));
+
+    // a reflect spread folds t = 1.25 back to 0.75; the covered half-alpha lands over what is there
+    $over = new FbBuffer(new FbFormat(FB_LAYOUT_RGBA8888, channelOrder: FB_CHANNELS_RGBA), 1, 1);
+    $over->paintGradient(spanBytes([0, 0, 1, 128]), $ramp, false, 2, [0, 0, 0, 0, 1.25, 0]);
+    expect(bin2hex($over->bytes()))->toBe('60200080');
+    // radial: hypot(u, v) = 0.5, repeat leaves it; a row offset moves y
+    $radial = new FbBuffer(new FbFormat(FB_LAYOUT_RGBA8888, channelOrder: FB_CHANNELS_RGBA), 1, 1);
+    $radial->paintGradient(spanBytes([0, 0, 1, 255]), $ramp, true, 1, [0, 0, 0, 0.25, 0.3, 0], 1);
+    expect(bin2hex($radial->bytes()))->toBe('7a8500ff');
+});
+
+it('refuses a malformed ramp, spread, inverse, row or span list in paintGradient(), painting nothing', function (): void {
+    $buffer = buffer(FB_LAYOUT_RGB565, 4, 2);
+    $ramp = str_repeat("\xff", 1024);
+    $spans = spanBytes([0, 0, 2, 255]);
+    $identity = [1, 0, 0, 1, 0, 0];
+
+    expect(fn () => $buffer->paintGradient($spans, 'short', false, 0, $identity))->toThrow(ValueError::class, '256 RGBA8 colours')
+        ->and(fn () => $buffer->paintGradient($spans, $ramp, false, 3, $identity))->toThrow(ValueError::class, '0 (pad), 1 (repeat) or 2 (reflect)')
+        ->and(fn () => $buffer->paintGradient($spans, $ramp, false, 0, [1, 0, 0, 1, 0]))->toThrow(ValueError::class, 'six finite numbers')
+        ->and(fn () => $buffer->paintGradient($spans, $ramp, false, 0, [1, 0, 0, 1, 0, NAN]))->toThrow(ValueError::class, 'six finite numbers')
+        ->and(fn () => $buffer->paintGradient($spans, $ramp, false, 0, $identity, -1))->toThrow(ValueError::class, 'between 0 and 65535')
+        ->and(fn () => $buffer->paintGradient('short', $ramp, false, 0, $identity))->toThrow(ValueError::class, 'whole number of 7-byte spans')
+        ->and(fn () => $buffer->paintGradient(spanBytes([0, 3, 2, 255]), $ramp, false, 0, $identity))->toThrow(ValueError::class, 'not inside a 4x2 framebuffer')
+        ->and($buffer->paintGradient('', $ramp, false, 0, $identity))->toBeNull()
+        ->and(bin2hex($buffer->bytes()))->toBe(str_repeat('00', 16));
+});
+
 it('refuses a malformed image, inverse, target, opacity or row, painting nothing', function (): void {
     $buffer = buffer(FB_LAYOUT_RGB565, 4, 4);
     $pixel = "\xff\xff\xff\xff";

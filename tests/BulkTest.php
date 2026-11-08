@@ -235,6 +235,32 @@ function blends(array $arguments): bool
     return ! in_array($arguments['layout'], [FB_LAYOUT_MONO_ROWS, FB_LAYOUT_MONO_PAGES, FB_LAYOUT_PLANAR], true) && ! isset($arguments['palette']);
 }
 
+/**
+ * The spans painted pixel by pixel with get(), set() and the mapper: the rule paintSpans() keeps.
+ *
+ * @param list<array{int, int, int, int}> $list [y, x, length, coverage]
+ */
+function paintByPixel(FbBuffer $expected, FbFormat $format, array $arguments, array $list, int $colour): void
+{
+    [$red, $green, $blue, $alpha] = [$colour >> 24, ($colour >> 16) & 0xFF, ($colour >> 8) & 0xFF, $colour & 0xFF];
+    foreach ($list as [$y, $x0, $length, $coverage]) {
+        $a = intdiv($alpha * $coverage + 127, 255);
+        for ($x = $x0; $x < $x0 + $length; $x++) {
+            if ($a === 255 || (! blends($arguments) && $a >= 128)) {
+                $expected->set($x, $y, $format->mapRgba8($red, $green, $blue, $alpha));
+            } elseif ($a > 0 && blends($arguments)) {
+                $d = $format->unmapRgba8($expected->get($x, $y));
+                $expected->set($x, $y, $format->mapRgba8(
+                    intdiv($red * $a + ($d >> 24) * (255 - $a) + 127, 255),
+                    intdiv($green * $a + (($d >> 16) & 0xFF) * (255 - $a) + 127, 255),
+                    intdiv($blue * $a + (($d >> 8) & 0xFF) * (255 - $a) + 127, 255),
+                    intdiv(255 * $a + ($d & 0xFF) * (255 - $a) + 127, 255),
+                ));
+            }
+        }
+    }
+}
+
 it('paints spans to what the mapper and the blend rule give pixel by pixel', function (array $arguments): void {
     $format = bulkFormat($arguments);
     $painted = noise($format, 10);
@@ -258,24 +284,126 @@ it('paints spans to what the mapper and the blend rule give pixel by pixel', fun
         }
 
         $painted->paintSpans($spans, $colour);
-        [$red, $green, $blue, $alpha] = [$colour >> 24, ($colour >> 16) & 0xFF, ($colour >> 8) & 0xFF, $colour & 0xFF];
-        foreach ($list as [$y, $x0, $length, $coverage]) {
-            $a = intdiv($alpha * $coverage + 127, 255);
-            for ($x = $x0; $x < $x0 + $length; $x++) {
-                if ($a === 255 || (! blends($arguments) && $a >= 128)) {
-                    $expected->set($x, $y, $format->mapRgba8($red, $green, $blue, $alpha));
-                } elseif ($a > 0 && blends($arguments)) {
-                    $d = $format->unmapRgba8($expected->get($x, $y));
-                    $expected->set($x, $y, $format->mapRgba8(
-                        intdiv($red * $a + ($d >> 24) * (255 - $a) + 127, 255),
-                        intdiv($green * $a + (($d >> 16) & 0xFF) * (255 - $a) + 127, 255),
-                        intdiv($blue * $a + (($d >> 8) & 0xFF) * (255 - $a) + 127, 255),
-                        intdiv(255 * $a + ($d & 0xFF) * (255 - $a) + 127, 255),
-                    ));
-                }
-            }
-        }
+        paintByPixel($expected, $format, $arguments, $list, $colour);
 
         expect(bin2hex($painted->bytes()))->toBe(bin2hex($expected->bytes()), "round {$round}");
     }
 })->with('formats');
+
+it('paints opaque, short and long runs to what the mapper and the blend rule give pixel by pixel', function (array $arguments): void {
+    $format = bulkFormat($arguments);
+    [$painted, $expected] = [noise($format, 12, 80, 9), noise($format, 12, 80, 9)];
+
+    foreach ([0x3366CCFF, 0xC0A060B0, 0x10F0807F, 0xFFFFFF01] as $round => $colour) {
+        [$spans, $list] = ['', []];
+        foreach ([[1, 0, 255], [2, 3, 128], [3, 9, 200], [31, 20, 255], [32, 1, 90], [33, 40, 255], [79, 0, 37], [80, 0, 255]] as $row => [$length, $x, $coverage]) {
+            $length = min($length, 80 - $x);
+            $spans .= pack('vvvC', $row, $x, $length, $coverage);
+            $list[] = [$row, $x, $length, $coverage];
+        }
+        $painted->paintSpans($spans, $colour);
+        paintByPixel($expected, $format, $arguments, $list, $colour);
+
+        expect(bin2hex($painted->bytes()))->toBe(bin2hex($expected->bytes()), "round {$round}");
+    }
+})->with('formats');
+
+/**
+ * The spans that paint what masks paint: per mask in order, per row inside the clip, a span per run of one coverage
+ * above 0, cut to the clip.
+ *
+ * @param list<array{string, int, int, int}> $masks
+ * @param array{int, int, int, int} $clip
+ */
+function maskSpans(array $masks, array $clip): string
+{
+    [$cx, $cy, $cw, $ch] = $clip;
+    $spans = '';
+    foreach ($masks as [$coverage, $width, $left, $top]) {
+        $height = intdiv(strlen($coverage), $width);
+        for ($row = 0; $row < $height; $row++) {
+            $y = $top + $row;
+            if ($y < $cy || $y >= $cy + $ch) {
+                continue;
+            }
+            for ($col = 0; $col < $width;) {
+                $c = ord($coverage[$row * $width + $col]);
+                $end = $col + 1;
+                while ($end < $width && ord($coverage[$row * $width + $end]) === $c) {
+                    $end++;
+                }
+                $x0 = max($left + $col, $cx);
+                $x1 = min($left + $end, $cx + $cw);
+                if ($c > 0 && $x1 > $x0) {
+                    $spans .= pack('vvvC', $y, $x0, $x1 - $x0, $c);
+                }
+                $col = $end;
+            }
+        }
+    }
+
+    return $spans;
+}
+
+/** @return list<array{string, int, int, int}> Masks of coverage runs, overlapping, some past the buffer's edges. */
+function randomMasks(int $count): array
+{
+    $masks = [];
+    for ($i = 0; $i < $count; $i++) {
+        $width = mt_rand(1, 9);
+        $height = mt_rand(1, 7);
+        $coverage = '';
+        for ($k = 0; $k < $width * $height;) {
+            $run = mt_rand(1, 4);
+            $coverage .= str_repeat(chr([0, 0, 1, 127, 128, 254, 255, 255, mt_rand(0, 255)][mt_rand(0, 8)]), $run);
+            $k += $run;
+        }
+        $masks[] = [substr($coverage, 0, $width * $height), $width, mt_rand(-4, BULK_WIDTH), mt_rand(-4, BULK_HEIGHT)];
+    }
+
+    return $masks;
+}
+
+it('paints masks as paintSpans paints the same runs: overlap in order, cut to the clip, the same bounds', function (array $arguments): void {
+    $format = bulkFormat($arguments);
+    $masked = noise($format, 20);
+    $spanned = noise($format, 20);
+    mt_srand(21);
+
+    foreach ([[0, 0, BULK_WIDTH, BULK_HEIGHT], [2, 3, 7, 9], [BULK_WIDTH - 1, 0, 1, BULK_HEIGHT]] as $round => $clip) {
+        $colour = (mt_rand() << 16 ^ mt_rand()) & 0xFFFFFFFF;
+        $masks = randomMasks(12);
+        $box = $masked->paintMasks($masks, $colour, ...$clip);
+        $spans = maskSpans($masks, $clip);
+        $expected = $spans === '' ? null : $spanned->paintSpans($spans, $colour);
+
+        expect($box)->toBe($expected, "round {$round}")
+            ->and(bin2hex($masked->bytes()))->toBe(bin2hex($spanned->bytes()), "round {$round}");
+    }
+})->with('formats');
+
+it('paints nothing and answers null for masks off the clip or of no coverage', function (): void {
+    $buffer = noise(bulkFormat(['layout' => FB_LAYOUT_RGBA8888, 'channelOrder' => FB_CHANNELS_RGBA]), 30);
+    $before = $buffer->bytes();
+
+    expect($buffer->paintMasks([], 0xFF0000FF, 0, 0, BULK_WIDTH, BULK_HEIGHT))->toBeNull()
+        ->and($buffer->paintMasks([["\xFF\xFF", 2, 0, 0]], 0xFF0000FF, 4, 4, 3, 3))->toBeNull()
+        ->and($buffer->paintMasks([[str_repeat("\0", 6), 3, 0, 0]], 0xFF0000FF, 0, 0, BULK_WIDTH, BULK_HEIGHT))->toBeNull()
+        ->and($buffer->bytes())->toBe($before);
+});
+
+it('refuses a bad clip, colour or mask before painting any', function (array $masks, int $colour, array $clip, string $message): void {
+    $buffer = noise(bulkFormat(['layout' => FB_LAYOUT_RGBA8888, 'channelOrder' => FB_CHANNELS_RGBA]), 31);
+    $before = $buffer->bytes();
+
+    expect(fn () => $buffer->paintMasks($masks, $colour, ...$clip))->toThrow(ValueError::class, $message)
+        ->and($buffer->bytes())->toBe($before);
+})->with([
+    'clip off the buffer' => [[["\xFF", 1, 0, 0]], 0xFF, [0, 0, BULK_WIDTH + 1, 1], 'The clip is empty or not inside'],
+    'empty clip' => [[["\xFF", 1, 0, 0]], 0xFF, [0, 0, 0, 1], 'The clip is empty or not inside'],
+    'colour past 32 bits' => [[["\xFF", 1, 0, 0]], 0x1_0000_0000, [0, 0, 1, 1], 'takes a colour 0xRRGGBBAA'],
+    'a mask that is not a list of four' => [[["\xFF", 1, 0, 0], ["\xFF", 1, 0]], 0xFF, [0, 0, 1, 1], 'Mask 1 is not'],
+    'width that splits no rows' => [[["\xFF\xFF\xFF", 2, 0, 0]], 0xFF, [0, 0, 1, 1], 'Mask 0 is not whole rows'],
+    'no coverage bytes' => [[['', 1, 0, 0]], 0xFF, [0, 0, 1, 1], 'Mask 0 is not whole rows'],
+    'placed too far off' => [[["\xFF", 1, 1 << 31, 0]], 0xFF, [0, 0, 1, 1], 'Mask 0 is placed past'],
+]);

@@ -113,6 +113,22 @@ void fb_plane(const fb_format *format, const uint8_t *bytes, int width, int heig
  */
 void fb_paint_spans(const fb_format *format, uint8_t *bytes, int width, int height, const uint8_t *spans, size_t count, uint32_t rgba);
 
+/* A coverage mask placed on the buffer: `width` x `height` bytes, rows top-down, its top-left pixel at (left, top). */
+typedef struct {
+	const uint8_t *coverage;
+	int width;
+	int height;
+	int left;
+	int top;
+} fb_mask;
+
+/*
+ * Paint `count` masks in 0xRRGGBBAA, in order, each cut to `clip` (a rect inside the buffer). Each pixel of coverage
+ * c > 0 is painted as a span of coverage c is: the same alpha, blend and 128 rule as fb_paint_spans. Returns 1 and
+ * sets `bounds` to the box of the pixels with coverage (the box spans of them would have), 0 when there are none.
+ */
+int fb_paint_masks(const fb_format *format, uint8_t *bytes, int width, int height, const fb_mask *masks, size_t count, uint32_t rgba, fb_rect clip, fb_rect *bounds);
+
 /*
  * Paint a gradient through `count` spans (FB_SPAN_BYTES each, y, x, length uint16 LE, coverage uint8), every one
  * already checked to lie inside. `ramp` is 256 colours of 4 bytes, RGBA, straight alpha. The point (u, v) =
@@ -144,5 +160,49 @@ void fb_paint_gradient(const fb_format *format, uint8_t *bytes, int width, int h
 void fb_paint_rgba8(const fb_format *format, uint8_t *bytes, int width, int height, const uint8_t *rgba8, int source_width, int source_height,
 	const double inverse[6], fb_rect target, int opacity, int smooth, int row, uint32_t tint, const double *window,
 	const uint8_t *mask, size_t mask_count);
+
+/*
+ * Glass (Surface's drawing-path spec, G4): a dual-filter (Kawase) pyramid over RGBA8 levels, and one pane composited
+ * from it. Levels are RGBA8888 bytes, 4 a pixel, rows packed; every operation is per byte, so any channel order works.
+ *
+ * Down: `dst` (dw x dh, each ceil of the region's half) from the region `r` of `src` (sw wide): out(i, j) =
+ * (4 * C + S + 16) >> 5, C the sum of the 2x2 block at (2i, 2j) of the region and S the sum of the 4x4 block at
+ * (2i - 1, 2j - 1): the centre's bilinear tap and the four corner taps at +/-1 source pixel. Reads past the region
+ * take its edge.
+ * Up: `dst` (dw x dh, at most twice `src`) from `src` (sw x sh): the 8-tap tent, the edge midpoints at +/-1 source
+ * pixel (weight 1) and the diagonals at +/-1/2 (weight 2), each tap bilinear in quarter pixels, (sum + 96) / 192.
+ * Reads past the source take its edge.
+ */
+void fb_kawase_down(const uint8_t *src, int sw, fb_rect r, uint8_t *dst, int dw, int dh);
+void fb_kawase_up(const uint8_t *src, int sw, int sh, uint8_t *dst, int dw, int dh);
+
+/* A glass pane: its rounded box, the pyramid level it samples and the sharp capture, and its look. */
+typedef struct {
+	double box[4];             /* x0, y0, x1, y1 in target pixels */
+	double radii[4];           /* tl, tr, br, bl, held to 0..min(w, h)/2 */
+	const uint8_t *blur;       /* the blurred level, RGBA bytes */
+	int blur_width, blur_height, scale;
+	const uint8_t *sharp;      /* the capture at full size, RGBA bytes; NULL when frost is 1 */
+	int sharp_width, sharp_height;
+	int origin_x, origin_y;    /* the target pixel both levels start at */
+	double frost, refraction, bevel, saturation, light, grain;
+	uint32_t tint, rim;        /* 0xRRGGBBAA */
+	int alpha;                 /* 0..255, the pane's opacity */
+} fb_glass;
+
+/*
+ * One pane, every pixel of its box inside `clip` (inside the buffer) once, in doubles: d the signed distance to the
+ * rounded box at the pixel's centre and n its outward normal; nothing where d >= 1/2; f = e * e with
+ * e = clamp(1 + d / band, 0, 1), band the bevel (else the refraction, else 1); the sample point moved by
+ * -n * refraction * f; the blurred level sampled there bilinearly (and the sharp capture, mixed by frost);
+ * saturation about luma 0.2126/0.7152/0.0722; the tint mixed in by its alpha; + light * 255; + rim * rim alpha * f *
+ * (1/2 + n . (-0.6, -0.8) / 2); + grain * 0.04 * (hash(x, y) - 1/2) * 255; each channel floor(c + 1/2) held to
+ * 0..255, blended like a span at floor(clamp(1/2 - d, 0, 1) * alpha + 1/2). 0 when nothing was painted, else 1 with
+ * the bounds of what was.
+ */
+int fb_paint_glass(const fb_format *format, uint8_t *bytes, int width, int height, const fb_glass *glass, fb_rect clip, fb_rect *bounds);
+
+/* The grain hash of a pixel: 0..65535, the same everywhere. */
+uint32_t fb_grain(int x, int y);
 
 #endif

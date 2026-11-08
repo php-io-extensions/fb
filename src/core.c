@@ -1,5 +1,6 @@
 #include "core.h"
 
+#include <limits.h>
 #include <math.h>
 #include <string.h>
 
@@ -387,6 +388,35 @@ void fb_set(const fb_format *f, uint8_t *bytes, int width, int height, int x, in
 	}
 }
 
+/*
+ * `length` pixels of row y from x set to `word`. Whole-byte layouts store the first pixel and copy its bytes
+ * along, doubling (the bytes fb_set() writes, without its switch a pixel); bit-packed ones go pixel by pixel.
+ */
+static void fb_fill_row(const fb_format *f, uint8_t *bytes, int width, int height, int x, int y, int length, uint32_t word)
+{
+	size_t pixel = fb_pixel_bytes(f);
+
+	if (pixel == 0) {
+		for (int px = x; px < x + length; px++) {
+			fb_set(f, bytes, width, height, px, y, word);
+		}
+		return;
+	}
+	if (length <= 0) {
+		return;
+	}
+
+	uint8_t *p = bytes + ((size_t) y * (size_t) width + (size_t) x) * pixel;
+	size_t done = pixel, total = (size_t) length * pixel;
+
+	fb_store(f, p, word);
+	while (done < total) {
+		size_t n = done < total - done ? done : total - done;
+		memcpy(p + done, p, n);
+		done += n;
+	}
+}
+
 void fb_fill_rect(const fb_format *f, uint8_t *bytes, int width, int height, fb_rect rect, uint32_t word)
 {
 	fb_runs runs;
@@ -399,14 +429,12 @@ void fb_fill_rect(const fb_format *f, uint8_t *bytes, int width, int height, fb_
 		return;
 	}
 
-	/* Pixel by pixel: the first row when the others can be copied from it, every row when they cannot. */
+	/* Row by row: the first row when the others can be copied from it, every row when they cannot. */
 	int by_runs = fb_runs_of(f, width, height, rect, &runs);
 	int set_rows = by_runs ? 1 : rect.height;
 
 	for (int y = rect.y; y < rect.y + set_rows; y++) {
-		for (int x = rect.x; x < rect.x + rect.width; x++) {
-			fb_set(f, bytes, width, height, x, y, word);
-		}
+		fb_fill_row(f, bytes, width, height, rect.x, y, rect.width, word);
 	}
 	if (!by_runs) {
 		return;
@@ -808,35 +836,144 @@ static void fb_blend_run(const fb_format *f, uint8_t *bytes, int width, int heig
 	}
 }
 
+/* One colour painted as runs of coverage: what every run needs, worked out once. */
+typedef struct {
+	uint32_t red, green, blue, alpha, word;
+	int blends;
+	fb_blend_tables tables;
+} fb_run_paint;
+
+static void fb_run_paint_init(const fb_format *f, fb_run_paint *s, uint32_t rgba)
+{
+	s->red = rgba >> 24;
+	s->green = (rgba >> 16) & 0xFF;
+	s->blue = (rgba >> 8) & 0xFF;
+	s->alpha = rgba & 0xFF;
+	s->word = fb_map(f, (int) s->red, (int) s->green, (int) s->blue, (int) s->alpha);
+	s->blends = f->mode == FB_MODE_RGB || f->mode == FB_MODE_GREY;
+	s->tables.a = 256;
+}
+
+/*
+ * A short run blended in place, for the layouts fb_blend_run() reads in place: each channel byte by the expression
+ * its tables hold, (c * a + d * (255 - a) + 127) / 255, without building them. 0 for every other layout.
+ */
+static int fb_blend_short(const fb_format *f, uint8_t *bytes, int width, int x, int y, int length, const fb_run_paint *s, uint32_t a)
+{
+	uint32_t keep = 255 - a, r = s->red * a + 127, g = s->green * a + 127, b = s->blue * a + 127, al = 255 * a + 127;
+
+	if (f->layout == FB_LAYOUT_RGBA8888) {
+		const uint8_t *at = fb_rgba_at[f->channel_order];
+		uint8_t *p = bytes + ((size_t) y * (size_t) width + (size_t) x) * 4;
+
+		for (int i = 0; i < length; i++, p += 4) {
+			p[at[0]] = (uint8_t) ((r + p[at[0]] * keep) / 255);
+			p[at[1]] = (uint8_t) ((g + p[at[1]] * keep) / 255);
+			p[at[2]] = (uint8_t) ((b + p[at[2]] * keep) / 255);
+			p[at[3]] = (uint8_t) ((al + p[at[3]] * keep) / 255);
+		}
+		return 1;
+	}
+	if (f->layout == FB_LAYOUT_RGB888) {
+		int ri = f->channel_order == FB_CHANNELS_BGR ? 2 : 0, bi = 2 - ri;
+		uint8_t *p = bytes + ((size_t) y * (size_t) width + (size_t) x) * 3;
+
+		for (int i = 0; i < length; i++, p += 3) {
+			p[ri] = (uint8_t) ((r + p[ri] * keep) / 255);
+			p[1] = (uint8_t) ((g + p[1] * keep) / 255);
+			p[bi] = (uint8_t) ((b + p[bi] * keep) / 255);
+		}
+		return 1;
+	}
+	if (f->layout == FB_LAYOUT_INDEX8 && f->mode == FB_MODE_GREY) {
+		uint8_t *p = bytes + (size_t) y * (size_t) width + (size_t) x;
+
+		for (int i = 0; i < length; i++) {
+			uint32_t v = p[i];
+			p[i] = (uint8_t) fb_map(f, (int) ((r + v * keep) / 255), (int) ((g + v * keep) / 255), (int) ((b + v * keep) / 255), (int) ((al + 255 * keep) / 255));
+		}
+		return 1;
+	}
+
+	return 0;
+}
+
+/* A run of `length` pixels from (x, y) at one coverage, inside the buffer: what one span paints. */
+static void fb_paint_run(const fb_format *f, uint8_t *bytes, int width, int height, int x, int y, int length, uint32_t coverage, fb_run_paint *s)
+{
+	uint32_t a = (s->alpha * coverage + 127) / 255;
+
+	if (a == 0 || (!s->blends && a < 128)) {
+		return;
+	}
+	if (a == 255 || !s->blends) {
+		fb_fill_row(f, bytes, width, height, x, y, length, s->word);
+		return;
+	}
+	if (length >= FB_TABLE_RUN) {
+		fb_blend_tables_for(&s->tables, s->red, s->green, s->blue, a);
+		fb_blend_run(f, bytes, width, height, x, y, length, &s->tables);
+		return;
+	}
+	if (fb_blend_short(f, bytes, width, x, y, length, s, a)) {
+		return;
+	}
+	for (int px = x; px < x + length; px++) {
+		fb_blend(f, bytes, width, height, px, y, s->red, s->green, s->blue, a, 1);
+	}
+}
+
 void fb_paint_spans(const fb_format *f, uint8_t *bytes, int width, int height, const uint8_t *spans, size_t count, uint32_t rgba)
 {
-	uint32_t red = rgba >> 24, green = (rgba >> 16) & 0xFF, blue = (rgba >> 8) & 0xFF, alpha = rgba & 0xFF;
-	uint32_t word = fb_map(f, (int) red, (int) green, (int) blue, (int) alpha);
-	int blends = f->mode == FB_MODE_RGB || f->mode == FB_MODE_GREY;
-	fb_blend_tables tables;
+	fb_run_paint s;
 
-	tables.a = 256;
+	fb_run_paint_init(f, &s, rgba);
 	for (size_t i = 0; i < count; i++) {
 		const uint8_t *p = spans + i * FB_SPAN_BYTES;
-		int y = p[0] | (p[1] << 8), x = p[2] | (p[3] << 8), length = p[4] | (p[5] << 8);
-		uint32_t a = (alpha * p[6] + 127) / 255;
 
-		if (a == 0 || (!blends && a < 128)) {
-			continue;
-		}
-		if (a == 255 || !blends) {
-			fb_fill_rect(f, bytes, width, height, (fb_rect) {x, y, length, 1}, word);
-			continue;
-		}
-		if (length >= FB_TABLE_RUN) {
-			fb_blend_tables_for(&tables, red, green, blue, a);
-			fb_blend_run(f, bytes, width, height, x, y, length, &tables);
-			continue;
-		}
-		for (int px = x; px < x + length; px++) {
-			fb_blend(f, bytes, width, height, px, y, red, green, blue, a, 1);
+		fb_paint_run(f, bytes, width, height, p[2] | (p[3] << 8), p[0] | (p[1] << 8), p[4] | (p[5] << 8), p[6], &s);
+	}
+}
+
+int fb_paint_masks(const fb_format *f, uint8_t *bytes, int width, int height, const fb_mask *masks, size_t count, uint32_t rgba, fb_rect clip, fb_rect *bounds)
+{
+	int left = INT_MAX, top = INT_MAX, right = INT_MIN, bottom = INT_MIN;
+	int clip_right = clip.x + clip.width, clip_bottom = clip.y + clip.height;
+	fb_run_paint s;
+
+	fb_run_paint_init(f, &s, rgba);
+	for (size_t i = 0; i < count; i++) {
+		const fb_mask *m = masks + i;
+		/* the mask's place cut to the clip, in 64 bits: a place far off the surface cannot wrap */
+		int64_t x0 = m->left > clip.x ? m->left : clip.x, x1 = (int64_t) m->left + m->width < clip_right ? (int64_t) m->left + m->width : clip_right;
+		int64_t y0 = m->top > clip.y ? m->top : clip.y, y1 = (int64_t) m->top + m->height < clip_bottom ? (int64_t) m->top + m->height : clip_bottom;
+
+		for (int64_t y = y0; y < y1; y++) {
+			const uint8_t *row = m->coverage + (size_t) (y - m->top) * (size_t) m->width;
+
+			for (int64_t x = x0; x < x1;) {
+				uint8_t c = row[x - m->left];
+				int64_t end = x + 1;
+
+				while (end < x1 && row[end - m->left] == c) {
+					end++;
+				}
+				if (c != 0) {
+					fb_paint_run(f, bytes, width, height, (int) x, (int) y, (int) (end - x), c, &s);
+					left = (int) x < left ? (int) x : left;
+					right = (int) end > right ? (int) end : right;
+					top = (int) y < top ? (int) y : top;
+					bottom = (int) y + 1 > bottom ? (int) y + 1 : bottom;
+				}
+				x = end;
+			}
 		}
 	}
+	if (right == INT_MIN) {
+		return 0;
+	}
+	*bounds = (fb_rect) {left, top, right - left, bottom - top};
+	return 1;
 }
 
 void fb_paint_gradient(const fb_format *f, uint8_t *bytes, int width, int height, const uint8_t *spans, size_t count,
@@ -1025,4 +1162,204 @@ void fb_plane(const fb_format *f, const uint8_t *bytes, int width, int height, u
 			}
 		}
 	}
+}
+
+/* ---- Glass: the Kawase pyramid and the pane ---- */
+
+#define FB_MIN(a, b) ((a) < (b) ? (a) : (b))
+#define FB_MAX(a, b) ((a) > (b) ? (a) : (b))
+
+static inline int fb_clamp_edge(int v, int low, int high)
+{
+	return v < low ? low : (v > high ? high : v);
+}
+
+void fb_kawase_down(const uint8_t *src, int sw, fb_rect r, uint8_t *dst, int dw, int dh)
+{
+	int right = r.x + r.width - 1, bottom = r.y + r.height - 1;
+
+	for (int j = 0; j < dh; j++) {
+		int rows[4];
+		for (int b = 0; b < 4; b++) {
+			rows[b] = fb_clamp_edge(r.y + 2 * j - 1 + b, r.y, bottom);
+		}
+		for (int i = 0; i < dw; i++) {
+			int cols[4];
+			for (int a = 0; a < 4; a++) {
+				cols[a] = fb_clamp_edge(r.x + 2 * i - 1 + a, r.x, right);
+			}
+			uint8_t *out = dst + ((size_t) j * (size_t) dw + (size_t) i) * 4;
+			for (int k = 0; k < 4; k++) {
+				uint32_t all = 0, centre = 0;
+				for (int b = 0; b < 4; b++) {
+					const uint8_t *row = src + (size_t) rows[b] * (size_t) sw * 4 + (size_t) k;
+					for (int a = 0; a < 4; a++) {
+						uint32_t v = row[(size_t) cols[a] * 4];
+						all += v;
+						if ((a == 1 || a == 2) && (b == 1 || b == 2)) {
+							centre += v;
+						}
+					}
+				}
+				out[k] = (uint8_t) ((4 * centre + all + 16) >> 5);
+			}
+		}
+	}
+}
+
+/* 16 x the bilinear value of channel k at (x4, y4), quarter pixels from the source's pixel centres. */
+static inline uint32_t fb_tap16(const uint8_t *src, int sw, int sh, int x4, int y4, int k)
+{
+	int ix = x4 >> 2, iy = y4 >> 2;   /* arithmetic shifts: floor */
+	uint32_t fx = (uint32_t) (x4 & 3), fy = (uint32_t) (y4 & 3);
+	int x0 = fb_clamp_edge(ix, 0, sw - 1), x1 = fb_clamp_edge(ix + 1, 0, sw - 1);
+	int y0 = fb_clamp_edge(iy, 0, sh - 1), y1 = fb_clamp_edge(iy + 1, 0, sh - 1);
+	const uint8_t *r0 = src + (size_t) y0 * (size_t) sw * 4 + (size_t) k, *r1 = src + (size_t) y1 * (size_t) sw * 4 + (size_t) k;
+
+	return (4 - fy) * ((4 - fx) * r0[(size_t) x0 * 4] + fx * r0[(size_t) x1 * 4])
+		+ fy * ((4 - fx) * r1[(size_t) x0 * 4] + fx * r1[(size_t) x1 * 4]);
+}
+
+void fb_kawase_up(const uint8_t *src, int sw, int sh, uint8_t *dst, int dw, int dh)
+{
+	for (int y = 0; y < dh; y++) {
+		int y4 = 2 * y - 1;   /* the output centre in source pixels is y / 2 - 1/4 */
+		for (int x = 0; x < dw; x++) {
+			int x4 = 2 * x - 1;
+			uint8_t *out = dst + ((size_t) y * (size_t) dw + (size_t) x) * 4;
+			for (int k = 0; k < 4; k++) {
+				uint32_t sum = fb_tap16(src, sw, sh, x4 - 4, y4, k) + fb_tap16(src, sw, sh, x4 + 4, y4, k)
+					+ fb_tap16(src, sw, sh, x4, y4 - 4, k) + fb_tap16(src, sw, sh, x4, y4 + 4, k)
+					+ 2 * (fb_tap16(src, sw, sh, x4 - 2, y4 - 2, k) + fb_tap16(src, sw, sh, x4 + 2, y4 - 2, k)
+						+ fb_tap16(src, sw, sh, x4 - 2, y4 + 2, k) + fb_tap16(src, sw, sh, x4 + 2, y4 + 2, k));
+				out[k] = (uint8_t) ((sum + 96) / 192);
+			}
+		}
+	}
+}
+
+uint32_t fb_grain(int x, int y)
+{
+	uint32_t h = (uint32_t) x * 374761393u + (uint32_t) y * 668265263u;
+
+	h = (h ^ (h >> 13)) * 1274126177u;
+	h ^= h >> 16;
+
+	return h & 0xFFFFu;
+}
+
+/* Channel k of a level, bilinear at (u, v) in its pixel-centre coordinates, edges held. */
+static inline double fb_level_sample(const uint8_t *level, int w, int h, double u, double v, int k)
+{
+	double fu = floor(u), fv = floor(v);
+	double tx = u - fu, ty = v - fv;
+	int x0 = fb_clamp_edge((int) fu, 0, w - 1), x1 = fb_clamp_edge((int) fu + 1, 0, w - 1);
+	int y0 = fb_clamp_edge((int) fv, 0, h - 1), y1 = fb_clamp_edge((int) fv + 1, 0, h - 1);
+	double a = level[((size_t) y0 * (size_t) w + (size_t) x0) * 4 + (size_t) k];
+	double b = level[((size_t) y0 * (size_t) w + (size_t) x1) * 4 + (size_t) k];
+	double c = level[((size_t) y1 * (size_t) w + (size_t) x0) * 4 + (size_t) k];
+	double d = level[((size_t) y1 * (size_t) w + (size_t) x1) * 4 + (size_t) k];
+	double top = a + (b - a) * tx, under = c + (d - c) * tx;
+
+	return top + (under - top) * ty;
+}
+
+static inline int fb_channel(double c)
+{
+	double v = floor(c + 0.5);
+
+	return v < 0.0 ? 0 : (v > 255.0 ? 255 : (int) v);
+}
+
+int fb_paint_glass(const fb_format *f, uint8_t *bytes, int width, int height, const fb_glass *g, fb_rect clip, fb_rect *bounds)
+{
+	int blends = f->mode == FB_MODE_RGB || f->mode == FB_MODE_GREY;
+	double cx = (g->box[0] + g->box[2]) / 2, cy = (g->box[1] + g->box[3]) / 2;
+	double hx = (g->box[2] - g->box[0]) / 2, hy = (g->box[3] - g->box[1]) / 2;
+	double band = g->bevel > 0 ? g->bevel : (g->refraction > 0 ? g->refraction : 1.0);
+	double tint[3] = {(double) (g->tint >> 24), (double) ((g->tint >> 16) & 0xFF), (double) ((g->tint >> 8) & 0xFF)};
+	double tint_a = (double) (g->tint & 0xFF) / 255.0;
+	double rim[3] = {(double) (g->rim >> 24), (double) ((g->rim >> 16) & 0xFF), (double) ((g->rim >> 8) & 0xFF)};
+	double rim_a = (double) (g->rim & 0xFF) / 255.0;
+	int x_from = FB_MAX(clip.x, (int) floor(g->box[0])), x_to = FB_MIN(clip.x + clip.width, (int) ceil(g->box[2]));
+	int y_from = FB_MAX(clip.y, (int) floor(g->box[1])), y_to = FB_MIN(clip.y + clip.height, (int) ceil(g->box[3]));
+	int left = INT_MAX, top = INT_MAX, right = INT_MIN, bottom = INT_MIN;
+
+	for (int y = y_from; y < y_to; y++) {
+		double py = y + 0.5;
+		for (int x = x_from; x < x_to; x++) {
+			double px = x + 0.5;
+			double r = px < cx ? (py < cy ? g->radii[0] : g->radii[3]) : (py < cy ? g->radii[1] : g->radii[2]);
+			double dx = fabs(px - cx) - (hx - r), dy = fabs(py - cy) - (hy - r);
+			double d, nx, ny;
+
+			if (dx > 0 && dy > 0) {
+				double len = sqrt(dx * dx + dy * dy);
+				d = len - r;
+				nx = dx / len;
+				ny = dy / len;
+			} else if (dx > dy) {
+				d = dx - r;
+				nx = 1.0;
+				ny = 0.0;
+			} else {
+				d = dy - r;
+				nx = 0.0;
+				ny = 1.0;
+			}
+			if (d >= 0.5) {
+				continue;
+			}
+			if (px < cx) {
+				nx = -nx;
+			}
+			if (py < cy) {
+				ny = -ny;
+			}
+			double e = 1.0 + d / band;
+			e = e < 0.0 ? 0.0 : (e > 1.0 ? 1.0 : e);
+			double fe = e * e;
+			double sx = px - nx * g->refraction * fe, sy = py - ny * g->refraction * fe;
+			double u = (sx - g->origin_x) / g->scale - 0.5, v = (sy - g->origin_y) / g->scale - 0.5;
+			double c[3];
+
+			for (int k = 0; k < 3; k++) {
+				c[k] = fb_level_sample(g->blur, g->blur_width, g->blur_height, u, v, k);
+			}
+			if (g->sharp != NULL && g->frost < 1.0) {
+				double su = sx - g->origin_x - 0.5, sv = sy - g->origin_y - 0.5;
+				for (int k = 0; k < 3; k++) {
+					double sharp = fb_level_sample(g->sharp, g->sharp_width, g->sharp_height, su, sv, k);
+					c[k] = sharp + (c[k] - sharp) * g->frost;
+				}
+			}
+			double luma = 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+			double lit = 0.5 + 0.5 * (nx * -0.6 + ny * -0.8);
+			double grain = g->grain * 0.04 * ((double) fb_grain(x, y) / 65536.0 - 0.5) * 255.0;
+			int out[3];
+			for (int k = 0; k < 3; k++) {
+				double ck = luma + (c[k] - luma) * g->saturation;
+				ck = ck + (tint[k] - ck) * tint_a;
+				ck = ck + g->light * 255.0 + rim[k] * rim_a * fe * lit + grain;
+				out[k] = fb_channel(ck);
+			}
+			double cover = 0.5 - d;
+			cover = cover > 1.0 ? 1.0 : cover;
+			int a = (int) floor(cover * g->alpha + 0.5);
+			if (a <= 0) {
+				continue;
+			}
+			fb_blend(f, bytes, width, height, x, y, (uint32_t) out[0], (uint32_t) out[1], (uint32_t) out[2], (uint32_t) a, blends);
+			left = FB_MIN(left, x);
+			top = FB_MIN(top, y);
+			right = FB_MAX(right, x + 1);
+			bottom = FB_MAX(bottom, y + 1);
+		}
+	}
+	if (right == INT_MIN) {
+		return 0;
+	}
+	*bounds = (fb_rect) {left, top, right - left, bottom - top};
+
+	return 1;
 }

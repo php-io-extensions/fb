@@ -346,6 +346,53 @@ it('paints a gradient through spans: the ramp entry of floor(t × 255 + ½), the
     expect(bin2hex($radial->bytes()))->toBe('7a8500ff');
 });
 
+it('filters a region: premultiplied steps, straight pixels in and out, a name for a result, the rest left alone', function (): void {
+    $buffer = new FbBuffer(new FbFormat(FB_LAYOUT_RGBA8888, channelOrder: FB_CHANNELS_RGBA), 3, 1);
+    $buffer->set(0, 0, 0xff000080);   // outside the region
+    $buffer->set(1, 0, 0x80000080);   // straight (128, 0, 0) at alpha 128
+    $buffer->set(2, 0, 0x80000080);
+
+    // the flood laid over the pixels: opaque green; kept where the pixels have alpha ('in'): straight (0, 255, 0) at alpha 128
+    $buffer->filter([['flood', 0, 255, 0, 255, 'f'], ['composite', 'f', 'source', 0, 0.0, 0.0, 0.0, 0.0, null]], [], 1, 0, 1, 1);
+    $buffer->filter([['flood', 0, 255, 0, 255, 'f'], ['composite', 'f', 'source', 1, 0.0, 0.0, 0.0, 0.0, null]], [], 2, 0, 1, 1);
+
+    expect(bin2hex($buffer->bytes()))->toBe('ff000080'.'00ff00ff'.'00ff0080');
+
+    // a blur reads and writes only inside the region: the pixel outside is not smeared in
+    $row = new FbBuffer(new FbFormat(FB_LAYOUT_RGBA8888, channelOrder: FB_CHANNELS_RGBA), 5, 1);
+    $row->set(0, 0, 0xffffffff);
+    $row->filter([['blur', 0, 1.0, 0.0, 16, 0, null, null]], [], 1, 0, 4, 1);
+    expect($row->get(0, 0))->toBe(0xffffffff)
+        ->and($row->get(1, 0))->toBe(0);
+});
+
+it('filters premultiplied pixels as they are and writes them straight, even with no steps', function (): void {
+    $buffer = new FbBuffer(new FbFormat(FB_LAYOUT_RGBA8888, channelOrder: FB_CHANNELS_RGBA), 2, 1);
+    $buffer->set(0, 0, 0x40000080);   // premultiplied (64, 0, 0) at alpha 128: straight (64 × 255 + 64) / 128 = 128
+    $buffer->filter([], [], 0, 0, 2, 1, 0, true);
+
+    expect(bin2hex($buffer->bytes()))->toBe('80000080'.'00000000');
+});
+
+it('refuses a malformed filter, filtering nothing', function (): void {
+    $buffer = new FbBuffer(new FbFormat(FB_LAYOUT_RGBA8888, channelOrder: FB_CHANNELS_RGBA), 2, 1);
+    $buffer->set(0, 0, 0x11223344);
+    $flood = ['flood', 1, 2, 3, 255, null];
+
+    expect(fn () => $buffer->filter([['wobble']], [], 0, 0, 2, 1))->toThrow(ValueError::class, 'Filter step 0 is not a well-formed step')
+        ->and(fn () => $buffer->filter(['blur'], [], 0, 0, 2, 1))->toThrow(ValueError::class, 'Filter step 0 is not a well-formed step')
+        ->and(fn () => $buffer->filter([['flood', 1, 2, 3, 256, null]], [], 0, 0, 2, 1))->toThrow(ValueError::class, 'Filter step 0 is not a well-formed step')
+        ->and(fn () => $buffer->filter([['blur', 0, -1.0, 0.0, 16, 0, null, null]], [], 0, 0, 2, 1))->toThrow(ValueError::class, 'Filter step 0 is not a well-formed step')
+        ->and(fn () => $buffer->filter([['blend', 'nowhere', null, 0, null]], [], 0, 0, 2, 1))->toThrow(ValueError::class, 'reads a name no earlier step made')
+        ->and(fn () => $buffer->filter([$flood, ['blend', 'later', null, 0, null], ['flood', 1, 2, 3, 255, 'later']], [], 0, 0, 2, 1))->toThrow(ValueError::class, 'reads a name no earlier step made')
+        ->and(fn () => $buffer->filter([['displace', null, 0, 1.0, 0, 1, 1, 0.0, [], null]], [], 0, 0, 2, 1))->toThrow(ValueError::class, 'Filter step 0 is not a well-formed step')
+        ->and(fn () => $buffer->filter([['displace', null, 0, 1.0, 0, 1, 1, 0.0, [], null]], [[1, 1, 'short']], 0, 0, 2, 1))->toThrow(ValueError::class, 'Filter step 0 is not a well-formed step')
+        ->and(fn () => $buffer->filter([['noise', 2, 0.0, 0.0, 1, 4294967296, false, null]], [], 0, 0, 2, 1))->toThrow(ValueError::class, 'Filter step 0 is not a well-formed step')
+        ->and(fn () => $buffer->filter([$flood], [], 1, 0, 2, 1))->toThrow(ValueError::class, 'is empty or not inside a 2x1 framebuffer')
+        ->and(fn () => $buffer->filter([$flood], [], 0, 0, 2, 1, -1))->toThrow(ValueError::class, 'between 0 and 65535')
+        ->and($buffer->get(0, 0))->toBe(0x11223344);
+});
+
 it('refuses a malformed ramp, spread, inverse, row or span list in paintGradient(), painting nothing', function (): void {
     $buffer = buffer(FB_LAYOUT_RGB565, 4, 2);
     $ramp = str_repeat("\xff", 1024);

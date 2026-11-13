@@ -13,6 +13,15 @@ final class FbBuffer
 {
     public function __construct(FbFormat $format, int $width, int $height) {}
 
+    /**
+     * A buffer over bytes another object owns: nothing is allocated, copied or
+     * blanked. The bytes at $address are size() bytes in $format, rows packed
+     * with no padding between them, and stay valid while $owner lives; this
+     * buffer keeps $owner alive. Every method then reads and writes them.
+     * A wrong address is the caller's: it is not checked beyond being non-zero.
+     */
+    public static function over(FbFormat $format, int $width, int $height, int $address, object $owner): FbBuffer {}
+
     public function format(): FbFormat {}
 
     public function width(): int {}

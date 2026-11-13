@@ -1,5 +1,9 @@
 # Log
 
+## 2026-11-13
+
+* `FbBuffer::over()`: a buffer over bytes another object owns, for painting into another extension's memory in place. The buffer holds a borrowed flag and the owner; `free_obj` leaves borrowed bytes alone. `tests/OverTest.php`, also run under guard malloc. [surface](api/surface.md)
+
 ## 2026-11-07
 
 * Glass (Surface drawing-path spec, G4): `FbBuffer::kawaseDown()`, `kawaseUp()` (a dual-filter pyramid over RGBA8888 levels, integer: down (4·C + S + 16) >> 5, up the 8-tap tent in quarter pixels / 192) and `paintGlass()` (one pane per call over its rounded box: SDF, refraction along the normal, bilinear sample of the level, frost, saturation, tint, light, rim light, integer grain hash, anti-aliased edge). `core.h` holds the arithmetic; `tests/GlassTest.php` holds it to a PHP reference. Version unchanged.

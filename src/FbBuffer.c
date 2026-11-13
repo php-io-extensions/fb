@@ -14,6 +14,7 @@ static zend_object *phpfb_buffer_create(zend_class_entry *ce)
 	zend_object_std_init(&self->std, ce);
 	object_properties_init(&self->std, ce);
 	ZVAL_UNDEF(&self->format_object);
+	ZVAL_UNDEF(&self->owner);
 
 	return &self->std;
 }
@@ -22,10 +23,11 @@ static void phpfb_buffer_free(zend_object *obj)
 {
 	phpfb_buffer *self = phpfb_buffer_from(obj);
 
-	if (self->bytes != NULL) {
+	if (self->bytes != NULL && !self->borrowed) {
 		efree(self->bytes);
-		self->bytes = NULL;
 	}
+	self->bytes = NULL;
+	zval_ptr_dtor(&self->owner);
 	zval_ptr_dtor(&self->format_object);
 	zend_object_std_dtor(obj);
 }
@@ -140,6 +142,38 @@ static void phpfb_write_list(INTERNAL_FUNCTION_PARAMETERS, phpfb_buffer *self, H
 	phpfb_return_rect(return_value, (fb_rect) {(int) left, (int) top, (int) (right - left + 1), (int) (bottom - top + 1)});
 }
 
+/* A format and sides a buffer can have: true, or false with the exception thrown. Arguments 1, 2 and 3 of both makers. */
+static bool phpfb_shape(zend_object *format, zend_long width, zend_long height)
+{
+	if (!phpfb_format_from(format)->resolved) {
+		zend_throw_error(NULL, "FbFormat has not been constructed");
+		return false;
+	}
+	if (width < 1 || width > FB_MAX_SIDE) {
+		zend_argument_value_error(2, "must be between 1 and %d", FB_MAX_SIDE);
+		return false;
+	}
+	if (height < 1 || height > FB_MAX_SIDE) {
+		zend_argument_value_error(3, "must be between 1 and %d", FB_MAX_SIDE);
+		return false;
+	}
+	if (!phpfb_addressable(width, height)) {
+		zend_value_error("A " ZEND_LONG_FMT "x" ZEND_LONG_FMT " framebuffer is too large to address on this platform.", width, height);
+		return false;
+	}
+
+	return true;
+}
+
+static void phpfb_shape_set(phpfb_buffer *self, zend_object *format, zend_long width, zend_long height)
+{
+	self->format = phpfb_format_from(format)->format;
+	ZVAL_OBJ_COPY(&self->format_object, format);
+	self->width = (int) width;
+	self->height = (int) height;
+	self->size = fb_size(&self->format, self->width, self->height);
+}
+
 ZEND_METHOD(FbBuffer, __construct)
 {
 	zend_object *format;
@@ -156,30 +190,42 @@ ZEND_METHOD(FbBuffer, __construct)
 		zend_throw_error(NULL, "FbBuffer is already constructed");
 		RETURN_THROWS();
 	}
-	if (!phpfb_format_from(format)->resolved) {
-		zend_throw_error(NULL, "FbFormat has not been constructed");
-		RETURN_THROWS();
-	}
-	if (width < 1 || width > FB_MAX_SIDE) {
-		zend_argument_value_error(2, "must be between 1 and %d", FB_MAX_SIDE);
-		RETURN_THROWS();
-	}
-	if (height < 1 || height > FB_MAX_SIDE) {
-		zend_argument_value_error(3, "must be between 1 and %d", FB_MAX_SIDE);
-		RETURN_THROWS();
-	}
-	if (!phpfb_addressable(width, height)) {
-		zend_value_error("A " ZEND_LONG_FMT "x" ZEND_LONG_FMT " framebuffer is too large to address on this platform.", width, height);
+	if (!phpfb_shape(format, width, height)) {
 		RETURN_THROWS();
 	}
 
-	self->format = phpfb_format_from(format)->format;
-	ZVAL_OBJ_COPY(&self->format_object, format);
-	self->width = (int) width;
-	self->height = (int) height;
-	self->size = fb_size(&self->format, self->width, self->height);
+	phpfb_shape_set(self, format, width, height);
 	self->bytes = emalloc(self->size);
 	fb_blank(&self->format, self->bytes, self->width, self->height);
+}
+
+ZEND_METHOD(FbBuffer, over)
+{
+	zend_object *format, *owner;
+	zend_long width, height, address;
+
+	ZEND_PARSE_PARAMETERS_START(5, 5)
+		Z_PARAM_OBJ_OF_CLASS(format, phpfb_ce_FbFormat)
+		Z_PARAM_LONG(width)
+		Z_PARAM_LONG(height)
+		Z_PARAM_LONG(address)
+		Z_PARAM_OBJ(owner)
+	ZEND_PARSE_PARAMETERS_END();
+
+	if (!phpfb_shape(format, width, height)) {
+		RETURN_THROWS();
+	}
+	if (address == 0) {
+		zend_argument_value_error(4, "must be the address of the bytes, 0 given");
+		RETURN_THROWS();
+	}
+
+	object_init_ex(return_value, phpfb_ce_FbBuffer);
+	phpfb_buffer *self = phpfb_buffer_from(Z_OBJ_P(return_value));
+	phpfb_shape_set(self, format, width, height);
+	self->bytes = (uint8_t *) (uintptr_t) address;
+	self->borrowed = true;
+	ZVAL_OBJ_COPY(&self->owner, owner);
 }
 
 ZEND_METHOD(FbBuffer, format)

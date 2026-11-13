@@ -27,6 +27,8 @@ typedef struct {
 	int height;
 	size_t size;
 	uint8_t *bytes;            /* NULL until __construct has run */
+	bool borrowed;             /* the bytes are the owner's: FbBuffer::over() */
+	zval owner;                /* what keeps borrowed bytes alive; undef when the bytes are this buffer's */
 	zend_object std;
 } phpfb_buffer;
 

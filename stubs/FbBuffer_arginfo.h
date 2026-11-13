@@ -1,10 +1,18 @@
 /* This is a generated file, edit the .stub.php file instead.
- * Stub hash: 673eabf2f52ff7abeaec7e1140496dde81022eac */
+ * Stub hash: 541488ed5223765d05766f13693fa9b4ec37074d */
 
 ZEND_BEGIN_ARG_INFO_EX(arginfo_class_FbBuffer___construct, 0, 0, 3)
 	ZEND_ARG_OBJ_INFO(0, format, FbFormat, 0)
 	ZEND_ARG_TYPE_INFO(0, width, IS_LONG, 0)
 	ZEND_ARG_TYPE_INFO(0, height, IS_LONG, 0)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_WITH_RETURN_OBJ_INFO_EX(arginfo_class_FbBuffer_over, 0, 5, FbBuffer, 0)
+	ZEND_ARG_OBJ_INFO(0, format, FbFormat, 0)
+	ZEND_ARG_TYPE_INFO(0, width, IS_LONG, 0)
+	ZEND_ARG_TYPE_INFO(0, height, IS_LONG, 0)
+	ZEND_ARG_TYPE_INFO(0, address, IS_LONG, 0)
+	ZEND_ARG_TYPE_INFO(0, owner, IS_OBJECT, 0)
 ZEND_END_ARG_INFO()
 
 ZEND_BEGIN_ARG_WITH_RETURN_OBJ_INFO_EX(arginfo_class_FbBuffer_format, 0, 0, FbFormat, 0)
@@ -168,6 +176,7 @@ ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_class_FbBuffer_granularity, 0, 0
 ZEND_END_ARG_INFO()
 
 ZEND_METHOD(FbBuffer, __construct);
+ZEND_METHOD(FbBuffer, over);
 ZEND_METHOD(FbBuffer, format);
 ZEND_METHOD(FbBuffer, width);
 ZEND_METHOD(FbBuffer, height);
@@ -198,6 +207,7 @@ ZEND_METHOD(FbBuffer, granularity);
 
 static const zend_function_entry class_FbBuffer_methods[] = {
 	ZEND_ME(FbBuffer, __construct, arginfo_class_FbBuffer___construct, ZEND_ACC_PUBLIC)
+	ZEND_ME(FbBuffer, over, arginfo_class_FbBuffer_over, ZEND_ACC_PUBLIC|ZEND_ACC_STATIC)
 	ZEND_ME(FbBuffer, format, arginfo_class_FbBuffer_format, ZEND_ACC_PUBLIC)
 	ZEND_ME(FbBuffer, width, arginfo_class_FbBuffer_width, ZEND_ACC_PUBLIC)
 	ZEND_ME(FbBuffer, height, arginfo_class_FbBuffer_height, ZEND_ACC_PUBLIC)

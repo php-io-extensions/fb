@@ -5,7 +5,7 @@ description: Constants, FbFormat, FbBuffer: every method, what it refuses.
 resource: stubs/
 tags: [fb, pixels, c]
 status: draft
-generated: { by: claude-opus/5.5, at: 2026-11-07T21:20:00Z }
+generated: { by: claude-fable/5.2, at: 2026-11-13T09:00:00Z }
 sources:
   - id: stubs
     resource: stubs/
@@ -47,6 +47,7 @@ Refused (`ValueError`): unknown layout/order/scan; three-channel order on 32-bit
 | `paintMasks(masks, rgba, clipX, clipY, clipWidth, clipHeight)` | coverage masks `[string coverage, int width, int left, int top]` (rows top-down, whole rows of 1..65535 bytes, placed within ±2^30), each cut to the clip (non-empty, inside the buffer), painted in order; every pixel of coverage above 0 painted as `paintSpans` paints a span of that coverage; all checked first; returns the box of the pixels with coverage or null |
 | `paintGradient(spans, ramp, radial, spread, inverse, row = 0)` | A gradient through 7-byte spans: `ramp` is 256 RGBA8 colours; a pixel's centre goes through `inverse` `[a, b, c, d, e, f]` (y counted from `row`) to `(u, v)`, `t = u` or `hypot(u, v)` when `radial`; `spread` 0 pad, 1 repeat, 2 reflect folds t into 0..1; the colour is `ramp[floor(t × 255 + ½)]`, blended like a span at `(ramp alpha × coverage + 127) / 255`; `(u, v)` is worked out at a span's first pixel and stepped along it; returns the spans' bounding box or null |
 | `paintRgba8(rgba8, w, h, inverse, x, y, tw, th, opacity = 255, smooth = false, row = 0)` | RGBA8 image through an inverse placement `[a, b, c, d, e, f]`: each pixel of the target rect (inside the buffer) maps its centre to `(a·x + c·y + e, b·x + d·y + f)`, y counted from `row` (the row of a larger surface this buffer's row 0 stands for); inside the image it takes the pixel under it, or with `smooth` the four around it (1/256 weights, colours weighed by alpha, edges held); blended like a span at `(source alpha × opacity + 127) / 255` |
+| `FbBuffer::over(format, width, height, address, owner)` | static: a buffer over `size()` packed bytes at `address` that `owner` owns; nothing allocated, copied or blanked; keeps `owner` alive and never frees the bytes; address unchecked beyond non-zero; the span sink paints into it as into any buffer |
 | `pointer()`, `granularity()` | address of the bytes; `[w, 8]` for mono pages, `[1, 1]` otherwise |
 
 Both classes: final, no clone, no serialize, second `__construct` is `Error`.

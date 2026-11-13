@@ -278,6 +278,12 @@ Holds one `$width` × `$height` surface in `$format`, sides 1..65535, allocated 
 
 ---
 
+#### `FbBuffer::over(FbFormat $format, int $width, int $height, int $address, object $owner): FbBuffer`
+
+A buffer over bytes another object owns: memory another extension allocated, say. Nothing is allocated, copied or blanked. The bytes at `$address` must be `size()` bytes in `$format`, rows packed with no padding between them, and must stay valid while `$owner` lives; the buffer keeps `$owner` alive. Every method then reads and writes those bytes. The address is not checked beyond being non-zero, so a wrong one crashes the process.
+
+---
+
 #### `format(): FbFormat`, `width(): int`, `height(): int`, `size(): int`
 
 The format it was made with, its sides, and the bytes it holds.

@@ -362,6 +362,12 @@ Copies a rect from a buffer of the same size and storage, words as stored.
 
 ---
 
+#### `blit(FbBuffer $source, int $sx, int $sy, int $width, int $height, int $x, int $y, int $clipX = 0, int $clipY = 0, ?int $clipWidth = null, ?int $clipHeight = null): ?array`
+
+Copies the rect `($sx, $sy)`, `$width` × `$height`, of `$source` (any format and size, this buffer itself too, overlap allowed) to `($x, $y)`, clipped as `blitRgba8()` clips. When both formats share storage the words are copied as stored; otherwise each pixel is mapped through RGBA8 in C. Nothing passes through PHP. The source rect must lie inside `$source`. Answers the rect written, or `null` when nothing landed.
+
+---
+
 #### `paintSpans(string $spans, int $rgba): ?array`
 
 Paints coverage spans in one colour, `0xRRGGBBAA`. `$spans` holds 7-byte records, little-endian: `y`, `x` and `length` as uint16, `coverage` as uint8. The effective alpha is alpha × coverage. RGB and grey layouts blend source-over; mono, palette and planar layouts write the colour where the effective alpha reaches 128. Every span is checked before any is painted. Answers the spans' bounding box, or `null` for none.
@@ -377,6 +383,12 @@ Paints a straight-alpha RGBA8 image through an inverse placement.
 * `$opacity` — 0..255; each pixel blends like a span at source alpha × opacity.
 * `$smooth` — sample the four source pixels around the point, colours weighed by alpha and edges held, instead of the one under it.
 * `$row` — for a buffer that is a window onto a taller surface: the surface row its own row 0 stands for, 0..65535. `y` counts from there, so each window samples exactly as the whole surface would.
+
+---
+
+#### `paintBuffer(FbBuffer $source, array $inverse, int $x, int $y, int $targetWidth, int $targetHeight, int $opacity = 255, bool $smooth = false, int $row = 0, int $tint = 0xFFFFFFFF, ?array $window = null, ?string $coverage = null): void`
+
+`paintRgba8()` with the image read from `$source`, any format: an RGBA8 buffer is read where it is, any other is mapped to RGBA8 in C first. Nothing passes through PHP. Every other argument is `paintRgba8()`'s, and the result is the same bytes as `paintRgba8($source->rgba8(), …)`.
 
 ---
 

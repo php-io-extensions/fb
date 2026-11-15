@@ -174,6 +174,16 @@ static void phpfb_shape_set(phpfb_buffer *self, zend_object *format, zend_long w
 	self->size = fb_size(&self->format, self->width, self->height);
 }
 
+/* Effects read and write their buffers as packed rows: a buffer over padded rows is refused. */
+static bool phpfb_packed(const phpfb_buffer *buffer, const char *what)
+{
+	if (buffer->format.stride != 0) {
+		zend_value_error("%s works on packed rows; this buffer is over padded rows (FbBuffer::over() with a stride)", what);
+		return false;
+	}
+	return true;
+}
+
 ZEND_METHOD(FbBuffer, __construct)
 {
 	zend_object *format;
@@ -202,14 +212,16 @@ ZEND_METHOD(FbBuffer, __construct)
 ZEND_METHOD(FbBuffer, over)
 {
 	zend_object *format, *owner;
-	zend_long width, height, address;
+	zend_long width, height, address, stride = 0;
 
-	ZEND_PARSE_PARAMETERS_START(5, 5)
+	ZEND_PARSE_PARAMETERS_START(5, 6)
 		Z_PARAM_OBJ_OF_CLASS(format, phpfb_ce_FbFormat)
 		Z_PARAM_LONG(width)
 		Z_PARAM_LONG(height)
 		Z_PARAM_LONG(address)
 		Z_PARAM_OBJ(owner)
+		Z_PARAM_OPTIONAL
+		Z_PARAM_LONG(stride)
 	ZEND_PARSE_PARAMETERS_END();
 
 	if (!phpfb_shape(format, width, height)) {
@@ -219,10 +231,29 @@ ZEND_METHOD(FbBuffer, over)
 		zend_argument_value_error(4, "must be the address of the bytes, 0 given");
 		RETURN_THROWS();
 	}
+	const fb_format *f = &phpfb_format_from(format)->format;
+	size_t packed = fb_size(f, (int) width, 1);
+	if (stride != 0 && (size_t) stride != packed) {
+		/* Padded rows: only for layouts whose rows are whole pixels of whole bytes, and never shorter than a packed row. */
+		int whole = f->layout == FB_LAYOUT_RGBA8888 || f->layout == FB_LAYOUT_RGB888 || f->layout == FB_LAYOUT_RGB666
+			|| f->layout == FB_LAYOUT_RGB565 || f->layout == FB_LAYOUT_INDEX8;
+		if (!whole) {
+			zend_argument_value_error(6, "is only for formats with whole-byte pixels; this format packs its rows");
+			RETURN_THROWS();
+		}
+		if (stride < 0 || (size_t) stride < packed || (height > 0 && (size_t) stride > SIZE_MAX / (size_t) height)) {
+			zend_argument_value_error(6, "must be at least a packed row (%zu bytes), " ZEND_LONG_FMT " given", packed, stride);
+			RETURN_THROWS();
+		}
+	} else {
+		stride = 0;
+	}
 
 	object_init_ex(return_value, phpfb_ce_FbBuffer);
 	phpfb_buffer *self = phpfb_buffer_from(Z_OBJ_P(return_value));
 	phpfb_shape_set(self, format, width, height);
+	self->format.stride = (size_t) stride;
+	self->size = fb_size(&self->format, self->width, self->height);
 	self->bytes = (uint8_t *) (uintptr_t) address;
 	self->borrowed = true;
 	ZVAL_OBJ_COPY(&self->owner, owner);
@@ -410,7 +441,9 @@ ZEND_METHOD(FbBuffer, region)
 	}
 
 	const fb_format *to = format != NULL ? &phpfb_format_from(format)->format : &self->format;
-	zend_string *out = zend_string_alloc(fb_size(to, (int) width, (int) height), 0);
+	fb_format packed = *to;
+	packed.stride = 0;     /* the bytes handed out are packed rows, whatever this buffer's stride */
+	zend_string *out = zend_string_alloc(fb_size(&packed, (int) width, (int) height), 0);
 
 	fb_region(&self->format, self->bytes, self->width, self->height, (fb_rect) {(int) x, (int) y, (int) width, (int) height}, to, (uint8_t *) ZSTR_VAL(out));
 	ZSTR_VAL(out)[ZSTR_LEN(out)] = '\0';
@@ -507,8 +540,10 @@ ZEND_METHOD(FbBuffer, copy)
 		zend_throw_error(NULL, "FbBuffer has not been constructed");
 		RETURN_THROWS();
 	}
-	if (source->width != self->width || source->height != self->height || !fb_format_same_storage(&source->format, &self->format)) {
-		zend_argument_value_error(1, "must be a buffer of the same size and storage");
+	if (source->width != self->width || source->height != self->height || !fb_format_same_storage(&source->format, &self->format)
+			|| source->format.stride != self->format.stride) {
+		zend_argument_value_error(1, source->format.stride != self->format.stride && source->width == self->width && source->height == self->height
+			? "must be a buffer of the same size and storage, and the same row stride" : "must be a buffer of the same size and storage");
 		RETURN_THROWS();
 	}
 	if (!phpfb_rect_inside(self, x, y, width, height)) {
@@ -518,6 +553,63 @@ ZEND_METHOD(FbBuffer, copy)
 	}
 
 	fb_copy(&self->format, self->bytes, source->bytes, self->width, self->height, (fb_rect) {(int) x, (int) y, (int) width, (int) height});
+}
+
+ZEND_METHOD(FbBuffer, blit)
+{
+	zend_object *source_object;
+	zend_long sx, sy, width, height, x, y;
+	zend_long clip_x = 0, clip_y = 0, clip_width = 0, clip_height = 0;
+	bool clip_width_null = true, clip_height_null = true;
+
+	ZEND_PARSE_PARAMETERS_START(7, 11)
+		Z_PARAM_OBJ_OF_CLASS(source_object, phpfb_ce_FbBuffer)
+		Z_PARAM_LONG(sx)
+		Z_PARAM_LONG(sy)
+		Z_PARAM_LONG(width)
+		Z_PARAM_LONG(height)
+		Z_PARAM_LONG(x)
+		Z_PARAM_LONG(y)
+		Z_PARAM_OPTIONAL
+		Z_PARAM_LONG(clip_x)
+		Z_PARAM_LONG(clip_y)
+		Z_PARAM_LONG_OR_NULL(clip_width, clip_width_null)
+		Z_PARAM_LONG_OR_NULL(clip_height, clip_height_null)
+	ZEND_PARSE_PARAMETERS_END();
+	PHPFB_THIS_BUFFER(self);
+
+	phpfb_buffer *source = phpfb_buffer_from(source_object);
+	if (source->bytes == NULL) {
+		zend_throw_error(NULL, "FbBuffer has not been constructed");
+		RETURN_THROWS();
+	}
+	if (!phpfb_rect_inside(source, sx, sy, width, height)) {
+		zend_value_error("The source rect " ZEND_LONG_FMT "x" ZEND_LONG_FMT " at (" ZEND_LONG_FMT ", " ZEND_LONG_FMT ") is empty or not inside a %dx%d framebuffer.",
+			width, height, sx, sy, source->width, source->height);
+		RETURN_THROWS();
+	}
+
+	/* The target: the source rect at (x, y), clipped to the buffer and to the clip rect, as blitRgba8() clips. */
+	zend_long left = MAX(MAX(x, 0), clip_x);
+	zend_long top = MAX(MAX(y, 0), clip_y);
+	zend_long right = MIN(x + width, self->width);
+	zend_long bottom = MIN(y + height, self->height);
+
+	if (!clip_width_null) {
+		right = clip_width > 0 ? MIN(right, clip_x + MIN(clip_width, (zend_long) FB_MAX_SIDE)) : left;
+	}
+	if (!clip_height_null) {
+		bottom = clip_height > 0 ? MIN(bottom, clip_y + MIN(clip_height, (zend_long) FB_MAX_SIDE)) : top;
+	}
+	if (right <= left || bottom <= top) {
+		RETURN_NULL();
+	}
+
+	fb_rect target = {(int) left, (int) top, (int) (right - left), (int) (bottom - top)};
+
+	fb_blit(&self->format, self->bytes, self->width, self->height, &source->format, source->bytes, source->width, source->height,
+		(int) (sx + (left - x)), (int) (sy + (top - y)), target);
+	phpfb_return_rect(return_value, target);
 }
 
 ZEND_METHOD(FbBuffer, plane)
@@ -936,6 +1028,9 @@ ZEND_METHOD(FbBuffer, filter)
 		Z_PARAM_BOOL(premultiplied)
 	ZEND_PARSE_PARAMETERS_END();
 	PHPFB_THIS_BUFFER(self);
+	if (!phpfb_packed(self, "FbBuffer::filter()")) {
+		RETURN_THROWS();
+	}
 
 	if (!phpfb_rect_inside(self, x, y, width, height)) {
 		zend_value_error("The region " ZEND_LONG_FMT "x" ZEND_LONG_FMT " at (" ZEND_LONG_FMT ", " ZEND_LONG_FMT ") is empty or not inside a %dx%d framebuffer.",
@@ -1076,6 +1171,10 @@ ZEND_METHOD(FbBuffer, paintGradient)
 	phpfb_return_rect(return_value, (fb_rect) {left, top, right - left, bottom - top});
 }
 
+static void phpfb_paint_image(zval *return_value, phpfb_buffer *self, const uint8_t *rgba8, zend_long width, zend_long height,
+	HashTable *inverse_list, zend_long x, zend_long y, zend_long target_width, zend_long target_height, zend_long opacity, bool smooth,
+	zend_long row, zend_long tint, HashTable *window_list, zend_string *coverage, int shift);
+
 ZEND_METHOD(FbBuffer, paintRgba8)
 {
 	zend_string *rgba8;
@@ -1118,11 +1217,68 @@ ZEND_METHOD(FbBuffer, paintRgba8)
 		RETURN_THROWS();
 	}
 
+	phpfb_paint_image(return_value, self, (const uint8_t *) ZSTR_VAL(rgba8), width, height, inverse_list, x, y, target_width, target_height,
+		opacity, smooth, row, tint, window_list, coverage, 0);
+}
+
+ZEND_METHOD(FbBuffer, paintBuffer)
+{
+	zend_object *source_object;
+	HashTable *inverse_list;
+	zend_long x, y, target_width, target_height, opacity = 255, row = 0, tint = (zend_long) UINT32_MAX;
+	bool smooth = false;
+	HashTable *window_list = NULL;
+	zend_string *coverage = NULL;
+
+	ZEND_PARSE_PARAMETERS_START(6, 12)
+		Z_PARAM_OBJ_OF_CLASS(source_object, phpfb_ce_FbBuffer)
+		Z_PARAM_ARRAY_HT(inverse_list)
+		Z_PARAM_LONG(x)
+		Z_PARAM_LONG(y)
+		Z_PARAM_LONG(target_width)
+		Z_PARAM_LONG(target_height)
+		Z_PARAM_OPTIONAL
+		Z_PARAM_LONG(opacity)
+		Z_PARAM_BOOL(smooth)
+		Z_PARAM_LONG(row)
+		Z_PARAM_LONG(tint)
+		Z_PARAM_ARRAY_HT_OR_NULL(window_list)
+		Z_PARAM_STR_OR_NULL(coverage)
+	ZEND_PARSE_PARAMETERS_END();
+	PHPFB_THIS_BUFFER(self);
+
+	phpfb_buffer *source = phpfb_buffer_from(source_object);
+	if (source->bytes == NULL) {
+		zend_throw_error(NULL, "FbBuffer has not been constructed");
+		RETURN_THROWS();
+	}
+
+	/* An RGBA8 buffer is read where it is; any other is mapped to RGBA8 in C first. */
+	uint8_t *mapped = NULL;
+	const uint8_t *image = source->bytes;
+	if (!(source->format.layout == FB_LAYOUT_RGBA8888 && source->format.channel_order == FB_CHANNELS_RGBA && source->format.scan == FB_SCAN_TOP_DOWN
+			&& source->format.stride == 0)) {
+		mapped = emalloc((size_t) source->width * (size_t) source->height * 4);
+		fb_rgba8(&source->format, source->bytes, source->width, source->height, mapped);
+		image = mapped;
+	}
+
+	phpfb_paint_image(return_value, self, image, source->width, source->height, inverse_list, x, y, target_width, target_height,
+		opacity, smooth, row, tint, window_list, coverage, 2);
+	if (mapped != NULL) {
+		efree(mapped);
+	}
+}
+
+static void phpfb_paint_image(zval *return_value, phpfb_buffer *self, const uint8_t *rgba8, zend_long width, zend_long height,
+	HashTable *inverse_list, zend_long x, zend_long y, zend_long target_width, zend_long target_height, zend_long opacity, bool smooth,
+	zend_long row, zend_long tint, HashTable *window_list, zend_string *coverage, int shift)
+{
 	double inverse[6];
 	uint32_t count = 0;
 	zval *entry;
 	if (!zend_array_is_list(inverse_list) || zend_hash_num_elements(inverse_list) != 6) {
-		zend_argument_value_error(4, "must be a list of six finite numbers");
+		zend_argument_value_error(4 - shift, "must be a list of six finite numbers");
 		RETURN_THROWS();
 	}
 	ZEND_HASH_FOREACH_VAL(inverse_list, entry) {
@@ -1132,7 +1288,7 @@ ZEND_METHOD(FbBuffer, paintRgba8)
 		} else if (Z_TYPE_P(entry) == IS_DOUBLE && zend_finite(Z_DVAL_P(entry))) {
 			inverse[count] = Z_DVAL_P(entry);
 		} else {
-			zend_argument_value_error(4, "must be a list of six finite numbers");
+			zend_argument_value_error(4 - shift, "must be a list of six finite numbers");
 			RETURN_THROWS();
 		}
 		count++;
@@ -1144,16 +1300,16 @@ ZEND_METHOD(FbBuffer, paintRgba8)
 		RETURN_THROWS();
 	}
 	if (opacity < 0 || opacity > 255) {
-		zend_argument_value_error(9, "must be between 0 and 255");
+		zend_argument_value_error(9 - shift, "must be between 0 and 255");
 		RETURN_THROWS();
 	}
 	if (row < 0 || row > FB_MAX_SIDE) {
-		zend_argument_value_error(11, "must be between 0 and %d", FB_MAX_SIDE);
+		zend_argument_value_error(11 - shift, "must be between 0 and %d", FB_MAX_SIDE);
 		RETURN_THROWS();
 	}
 
 	if (tint < 0 || tint > (zend_long) UINT32_MAX) {
-		zend_argument_value_error(12, "must be a colour 0xRRGGBBAA");
+		zend_argument_value_error(12 - shift, "must be a colour 0xRRGGBBAA");
 		RETURN_THROWS();
 	}
 
@@ -1161,7 +1317,7 @@ ZEND_METHOD(FbBuffer, paintRgba8)
 	if (window_list != NULL) {
 		uint32_t seen = 0;
 		if (!zend_array_is_list(window_list) || zend_hash_num_elements(window_list) != 4) {
-			zend_argument_value_error(13, "must be a list of four finite numbers [u0, v0, u1, v1]");
+			zend_argument_value_error(13 - shift, "must be a list of four finite numbers [u0, v0, u1, v1]");
 			RETURN_THROWS();
 		}
 		ZEND_HASH_FOREACH_VAL(window_list, entry) {
@@ -1171,13 +1327,13 @@ ZEND_METHOD(FbBuffer, paintRgba8)
 			} else if (Z_TYPE_P(entry) == IS_DOUBLE && zend_finite(Z_DVAL_P(entry))) {
 				window[seen] = Z_DVAL_P(entry);
 			} else {
-				zend_argument_value_error(13, "must be a list of four finite numbers [u0, v0, u1, v1]");
+				zend_argument_value_error(13 - shift, "must be a list of four finite numbers [u0, v0, u1, v1]");
 				RETURN_THROWS();
 			}
 			seen++;
 		} ZEND_HASH_FOREACH_END();
 		if (!(window[0] < window[2] && window[1] < window[3])) {
-			zend_argument_value_error(13, "must have u0 < u1 and v0 < v1");
+			zend_argument_value_error(13 - shift, "must have u0 < u1 and v0 < v1");
 			RETURN_THROWS();
 		}
 	}
@@ -1185,7 +1341,7 @@ ZEND_METHOD(FbBuffer, paintRgba8)
 	size_t mask_count = 0;
 	if (coverage != NULL) {
 		if (ZSTR_LEN(coverage) % FB_SPAN_BYTES != 0) {
-			zend_argument_value_error(14, "must be a whole number of %d-byte spans, got %zu bytes", FB_SPAN_BYTES, ZSTR_LEN(coverage));
+			zend_argument_value_error(14 - shift, "must be a whole number of %d-byte spans, got %zu bytes", FB_SPAN_BYTES, ZSTR_LEN(coverage));
 			RETURN_THROWS();
 		}
 		/* Every span is checked before any pixel is painted: inside the buffer, rows ascending, x ascending without overlap. */
@@ -1197,11 +1353,11 @@ ZEND_METHOD(FbBuffer, paintRgba8)
 			int sy = p[0] | (p[1] << 8), sx = p[2] | (p[3] << 8), length = p[4] | (p[5] << 8);
 
 			if (length < 1 || sy >= self->height || length > self->width - sx) {
-				zend_argument_value_error(14, "has span %zu empty or not inside a %dx%d framebuffer", i, self->width, self->height);
+				zend_argument_value_error(14 - shift, "has span %zu empty or not inside a %dx%d framebuffer", i, self->width, self->height);
 				RETURN_THROWS();
 			}
 			if (sy < last_y || (sy == last_y && sx < last_end)) {
-				zend_argument_value_error(14, "has span %zu out of order: rows ascend, and x ascends without overlap within a row", i);
+				zend_argument_value_error(14 - shift, "has span %zu out of order: rows ascend, and x ascends without overlap within a row", i);
 				RETURN_THROWS();
 			}
 			last_y = sy;
@@ -1209,7 +1365,7 @@ ZEND_METHOD(FbBuffer, paintRgba8)
 		}
 	}
 
-	fb_paint_rgba8(&self->format, self->bytes, self->width, self->height, (const uint8_t *) ZSTR_VAL(rgba8), (int) width, (int) height,
+	fb_paint_rgba8(&self->format, self->bytes, self->width, self->height, rgba8, (int) width, (int) height,
 		inverse, (fb_rect) {(int) x, (int) y, (int) target_width, (int) target_height}, (int) opacity, smooth, (int) row,
 		(uint32_t) tint, window_list != NULL ? window : NULL, coverage != NULL ? (const uint8_t *) ZSTR_VAL(coverage) : NULL, mask_count);
 }
@@ -1259,8 +1415,14 @@ ZEND_METHOD(FbBuffer, kawaseDown)
 		Z_PARAM_LONG(height)
 	ZEND_PARSE_PARAMETERS_END();
 	PHPFB_THIS_BUFFER(self);
+	if (!phpfb_packed(self, "FbBuffer::kawaseDown()")) {
+		RETURN_THROWS();
+	}
 
 	phpfb_buffer *source = phpfb_buffer_from(source_object);
+	if (!phpfb_packed(source, "A Kawase source")) {
+		RETURN_THROWS();
+	}
 	if (source->bytes == NULL) {
 		zend_throw_error(NULL, "FbBuffer has not been constructed");
 		RETURN_THROWS();
@@ -1288,8 +1450,14 @@ ZEND_METHOD(FbBuffer, kawaseUp)
 		Z_PARAM_OBJ_OF_CLASS(source_object, phpfb_ce_FbBuffer)
 	ZEND_PARSE_PARAMETERS_END();
 	PHPFB_THIS_BUFFER(self);
+	if (!phpfb_packed(self, "FbBuffer::kawaseUp()")) {
+		RETURN_THROWS();
+	}
 
 	phpfb_buffer *source = phpfb_buffer_from(source_object);
+	if (!phpfb_packed(source, "A Kawase source")) {
+		RETURN_THROWS();
+	}
 	if (source->bytes == NULL) {
 		zend_throw_error(NULL, "FbBuffer has not been constructed");
 		RETURN_THROWS();
@@ -1352,10 +1520,16 @@ ZEND_METHOD(FbBuffer, paintGlass)
 		Z_PARAM_LONG(clip_height)
 	ZEND_PARSE_PARAMETERS_END();
 	PHPFB_THIS_BUFFER(self);
+	if (!phpfb_packed(self, "FbBuffer::paintGlass()")) {
+		RETURN_THROWS();
+	}
 
 	fb_glass g;
 	double look[9];
 	phpfb_buffer *blur = phpfb_buffer_from(blur_object), *sharp = sharp_object != NULL ? phpfb_buffer_from(sharp_object) : NULL;
+	if (!phpfb_packed(blur, "paintGlass()'s blur") || (sharp != NULL && !phpfb_packed(sharp, "paintGlass()'s sharp copy"))) {
+		RETURN_THROWS();
+	}
 
 	if (blur->bytes == NULL || (sharp != NULL && sharp->bytes == NULL)) {
 		zend_throw_error(NULL, "FbBuffer has not been constructed");

@@ -56,6 +56,8 @@ typedef struct {
 	int mode;
 	int bits;          /* bits per pixel of an index layout */
 	int levels;        /* the highest grey level */
+	/* bytes from one row to the next when the rows are padded (FbBuffer::over); 0 for packed rows */
+	size_t stride;
 } fb_format;
 
 typedef struct {
@@ -98,6 +100,14 @@ void fb_blit_rgba8(const fb_format *format, uint8_t *bytes, int width, int heigh
 
 /* Copy a rect between two buffers of the same size and storage. */
 void fb_copy(const fb_format *format, uint8_t *bytes, const uint8_t *source, int width, int height, fb_rect rect);
+
+/*
+ * Copy the rect (sx, sy, target.width x target.height) of a source buffer in `from` to `target` of
+ * this buffer: words as stored when both share storage, each pixel mapped through RGBA8 in C
+ * otherwise. The rects must lie inside their buffers; the source may be this buffer (overlap allowed).
+ */
+void fb_blit(const fb_format *format, uint8_t *bytes, int width, int height, const fb_format *from, const uint8_t *source,
+	int source_width, int source_height, int sx, int sy, fb_rect target);
 
 /* One bit per pixel into `out` (fb_plane_size bytes), x0 in bit 7: set where the pixel's word equals `word`. */
 void fb_plane(const fb_format *format, const uint8_t *bytes, int width, int height, uint32_t word, uint8_t *out);

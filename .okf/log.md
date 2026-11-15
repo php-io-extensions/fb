@@ -1,5 +1,9 @@
 # Log
 
+## 2026-11-15
+
+* `FbBuffer::blit()` and `FbBuffer::paintBuffer()`: another buffer as the source, so a frame's pixels go buffer to buffer in C instead of through an RGBA8 PHP string. `blit` copies words as stored when both formats share storage, maps through RGBA8 in C otherwise, and copies within one buffer (overlap allowed) by walking away from the target. `paintBuffer` reads an RGBA8 source in place and maps any other in C first. Both give the same bytes as the string paths (`blitRgba8`/`paintRgba8` of `rgba8()`); `tests/BlitTest.php`, 89 tests. Pest 1137 passed on NTS and ZTS.
+
 ## 2026-11-13
 
 * `FbBuffer::over()`: a buffer over bytes another object owns, for painting into another extension's memory in place. The buffer holds a borrowed flag and the owner; `free_obj` leaves borrowed bytes alone. `tests/OverTest.php`, also run under guard malloc. [surface](api/surface.md)
@@ -45,3 +49,4 @@
 ## 2026-10-13
 
 * Version 0.10.5: `PHP_FB_VERSION` and the version test move from 0.10.0. README rewritten to the php-io-extensions template.
+* **2026-11-15**: `FbBuffer::over()` takes an optional `$stride`: a buffer over padded rows (formats with whole-byte pixels). Every pixel, blit and paint method honours it; filter, Kawase and glass refuse padded rows; region() and rgba8() hand out packed rows.

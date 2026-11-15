@@ -103,6 +103,9 @@ int fb_format_same_storage(const fb_format *a, const fb_format *b)
 
 static size_t fb_row_bytes(const fb_format *f, int width)
 {
+	if (f->stride != 0) {
+		return f->stride;
+	}
 	switch (f->layout) {
 		case FB_LAYOUT_MONO_ROWS:
 		case FB_LAYOUT_PLANAR:
@@ -186,7 +189,7 @@ static int fb_runs_of(const fb_format *f, int width, int height, fb_rect rect, f
 	size_t pixel = fb_pixel_bytes(f);
 
 	if (pixel > 0) {
-		*runs = (fb_runs) {((size_t) rect.y * (size_t) width + (size_t) rect.x) * pixel, (size_t) rect.width * pixel, (size_t) width * pixel, 0, 1};
+		*runs = (fb_runs) {(size_t) rect.y * fb_row_bytes(f, width) + (size_t) rect.x * pixel, (size_t) rect.width * pixel, fb_row_bytes(f, width), 0, 1};
 		return 1;
 	}
 	if (f->layout != FB_LAYOUT_MONO_PAGES && rect.x == 0 && rect.width == width) {
@@ -287,7 +290,7 @@ uint32_t fb_get(const fb_format *f, const uint8_t *bytes, int width, int height,
 	size_t pixel = fb_pixel_bytes(f);
 
 	if (pixel > 0) {
-		return fb_load(f, bytes + ((size_t) y * (size_t) width + (size_t) x) * pixel);
+		return fb_load(f, bytes + (size_t) y * fb_row_bytes(f, width) + (size_t) x * pixel);
 	}
 
 	switch (f->layout) {
@@ -339,7 +342,7 @@ void fb_set(const fb_format *f, uint8_t *bytes, int width, int height, int x, in
 	size_t pixel = fb_pixel_bytes(f);
 
 	if (pixel > 0) {
-		fb_store(f, bytes + ((size_t) y * (size_t) width + (size_t) x) * pixel, word);
+		fb_store(f, bytes + (size_t) y * fb_row_bytes(f, width) + (size_t) x * pixel, word);
 		return;
 	}
 
@@ -406,7 +409,7 @@ static void fb_fill_row(const fb_format *f, uint8_t *bytes, int width, int heigh
 		return;
 	}
 
-	uint8_t *p = bytes + ((size_t) y * (size_t) width + (size_t) x) * pixel;
+	uint8_t *p = bytes + (size_t) y * fb_row_bytes(f, width) + (size_t) x * pixel;
 	size_t done = pixel, total = (size_t) length * pixel;
 
 	fb_store(f, p, word);
@@ -596,6 +599,10 @@ static void fb_reorder(uint8_t *restrict out, const uint8_t *restrict in, size_t
 void fb_region(const fb_format *f, const uint8_t *bytes, int width, int height, fb_rect rect, const fb_format *to, uint8_t *out)
 {
 	int same = to == f;
+	/* `out` is packed rows, whatever the stride of the bytes read */
+	fb_format to_packed = *to;
+	to_packed.stride = 0;
+	to = &to_packed;
 	size_t from_pixel = fb_pixel_bytes(f);
 	size_t to_pixel = fb_pixel_bytes(to);
 	fb_runs runs;
@@ -621,7 +628,7 @@ void fb_region(const fb_format *f, const uint8_t *bytes, int width, int height, 
 
 		for (int y = 0; y < rect.height; y++) {
 			int row = to->scan == FB_SCAN_BOTTOM_UP ? rect.height - 1 - y : y;
-			const uint8_t *p = bytes + ((size_t) (rect.y + y) * (size_t) width + (size_t) rect.x) * from_pixel;
+			const uint8_t *p = bytes + (size_t) (rect.y + y) * fb_row_bytes(f, width) + (size_t) rect.x * from_pixel;
 			uint8_t *q = out + (size_t) row * (size_t) rect.width * to_pixel;
 
 			if (reorder) {
@@ -661,6 +668,21 @@ void fb_rgba8(const fb_format *f, const uint8_t *bytes, int width, int height, u
 	size_t pixel = fb_pixel_bytes(f);
 	size_t pixels = (size_t) width * (size_t) height;
 
+	if (f->stride != 0 && pixel > 0) {
+		for (int y = 0; y < height; y++) {
+			const uint8_t *row = bytes + (size_t) y * f->stride;
+
+			if (f->layout == FB_LAYOUT_RGBA8888) {
+				fb_reorder(out, row, (size_t) width, f->channel_order, FB_CHANNELS_RGBA);
+				out += (size_t) width * 4;
+				continue;
+			}
+			for (int x = 0; x < width; x++, row += pixel) {
+				out = fb_put_rgba8(out, fb_unmap(f, fb_load(f, row)));
+			}
+		}
+		return;
+	}
 	if (f->layout == FB_LAYOUT_RGBA8888) {
 		fb_reorder(out, bytes, pixels, f->channel_order, FB_CHANNELS_RGBA);
 		return;
@@ -684,7 +706,7 @@ void fb_blit_rgba8(const fb_format *f, uint8_t *bytes, int width, int height, co
 
 	for (int y = target.y; y < target.y + target.height; y++) {
 		const uint8_t *p = rgba8 + ((size_t) (y - offset_y) * (size_t) source_width + (size_t) (target.x - offset_x)) * 4;
-		uint8_t *q = bytes + ((size_t) y * (size_t) width + (size_t) target.x) * pixel;
+		uint8_t *q = bytes + (size_t) y * fb_row_bytes(f, width) + (size_t) target.x * pixel;
 
 		if (f->layout == FB_LAYOUT_RGBA8888) {
 			fb_reorder(q, p, (size_t) target.width, FB_CHANNELS_RGBA, f->channel_order);
@@ -723,6 +745,33 @@ void fb_copy(const fb_format *f, uint8_t *bytes, const uint8_t *source, int widt
 	for (int y = rect.y; y < rect.y + rect.height; y++) {
 		for (int x = rect.x; x < rect.x + rect.width; x++) {
 			fb_set(f, bytes, width, height, x, y, fb_get(f, source, width, height, x, y));
+		}
+	}
+}
+
+void fb_blit(const fb_format *f, uint8_t *bytes, int width, int height, const fb_format *from, const uint8_t *source,
+	int source_width, int source_height, int sx, int sy, fb_rect target)
+{
+	int same = fb_format_same_storage(f, from);
+	size_t pixel = fb_pixel_bytes(f);
+	int rows_direct = same && pixel > 0 && f->scan == FB_SCAN_TOP_DOWN && from->scan == FB_SCAN_TOP_DOWN;
+	/* Within one buffer (same format, so words copy) the rects may overlap: walk away from the
+	 * target, backwards when it lies after the source, as memmove does. */
+	int back = source == bytes && (target.y > sy || (target.y == sy && target.x > sx));
+
+	for (int i = 0; i < target.height; i++) {
+		int y = back ? target.height - 1 - i : i;
+
+		if (rows_direct) {
+			memmove(bytes + (size_t) (target.y + y) * fb_row_bytes(f, width) + (size_t) target.x * pixel,
+				source + (size_t) (sy + y) * fb_row_bytes(from, source_width) + (size_t) sx * pixel, (size_t) target.width * pixel);
+			continue;
+		}
+		for (int j = 0; j < target.width; j++) {
+			int x = back ? target.width - 1 - j : j;
+			uint32_t word = fb_get(from, source, source_width, source_height, sx + x, sy + y);
+
+			fb_set(f, bytes, width, height, target.x + x, target.y + y, same ? word : fb_map_rgba(f, fb_unmap(from, word)));
 		}
 	}
 }
@@ -793,7 +842,7 @@ static void fb_blend_run(const fb_format *f, uint8_t *bytes, int width, int heig
 
 	if (f->layout == FB_LAYOUT_RGBA8888) {
 		const uint8_t *at = fb_rgba_at[f->channel_order];
-		uint8_t *p = bytes + ((size_t) y * (size_t) width + (size_t) x) * 4;
+		uint8_t *p = bytes + (size_t) y * fb_row_bytes(f, width) + (size_t) x * 4;
 
 		for (int i = 0; i < length; i++, p += 4) {
 			p[at[0]] = tr[p[at[0]]];
@@ -805,7 +854,7 @@ static void fb_blend_run(const fb_format *f, uint8_t *bytes, int width, int heig
 	}
 	if (f->layout == FB_LAYOUT_RGB888) {
 		int r = f->channel_order == FB_CHANNELS_BGR ? 2 : 0, b = 2 - r;
-		uint8_t *p = bytes + ((size_t) y * (size_t) width + (size_t) x) * 3;
+		uint8_t *p = bytes + (size_t) y * fb_row_bytes(f, width) + (size_t) x * 3;
 
 		for (int i = 0; i < length; i++, p += 3) {
 			p[r] = tr[p[r]];
@@ -822,7 +871,7 @@ static void fb_blend_run(const fb_format *f, uint8_t *bytes, int width, int heig
 			}
 			t->grey_ready = 1;
 		}
-		uint8_t *p = bytes + (size_t) y * (size_t) width + (size_t) x;
+		uint8_t *p = bytes + (size_t) y * fb_row_bytes(f, width) + (size_t) x;
 
 		for (int i = 0; i < length; i++) {
 			p[i] = t->grey[p[i]];
@@ -864,7 +913,7 @@ static int fb_blend_short(const fb_format *f, uint8_t *bytes, int width, int x, 
 
 	if (f->layout == FB_LAYOUT_RGBA8888) {
 		const uint8_t *at = fb_rgba_at[f->channel_order];
-		uint8_t *p = bytes + ((size_t) y * (size_t) width + (size_t) x) * 4;
+		uint8_t *p = bytes + (size_t) y * fb_row_bytes(f, width) + (size_t) x * 4;
 
 		for (int i = 0; i < length; i++, p += 4) {
 			p[at[0]] = (uint8_t) ((r + p[at[0]] * keep) / 255);
@@ -876,7 +925,7 @@ static int fb_blend_short(const fb_format *f, uint8_t *bytes, int width, int x, 
 	}
 	if (f->layout == FB_LAYOUT_RGB888) {
 		int ri = f->channel_order == FB_CHANNELS_BGR ? 2 : 0, bi = 2 - ri;
-		uint8_t *p = bytes + ((size_t) y * (size_t) width + (size_t) x) * 3;
+		uint8_t *p = bytes + (size_t) y * fb_row_bytes(f, width) + (size_t) x * 3;
 
 		for (int i = 0; i < length; i++, p += 3) {
 			p[ri] = (uint8_t) ((r + p[ri] * keep) / 255);
@@ -886,7 +935,7 @@ static int fb_blend_short(const fb_format *f, uint8_t *bytes, int width, int x, 
 		return 1;
 	}
 	if (f->layout == FB_LAYOUT_INDEX8 && f->mode == FB_MODE_GREY) {
-		uint8_t *p = bytes + (size_t) y * (size_t) width + (size_t) x;
+		uint8_t *p = bytes + (size_t) y * fb_row_bytes(f, width) + (size_t) x;
 
 		for (int i = 0; i < length; i++) {
 			uint32_t v = p[i];
@@ -1053,7 +1102,7 @@ void fb_paint_rgba8(const fb_format *f, uint8_t *bytes, int width, int height, c
 		double py = (double) (y + row) + 0.5;
 		/* the y products, hoisted: (ia * px + cy) + ie is today's sum, term for term (a running sum over x is not) */
 		double cy = ic * py, dy = id * py;
-		uint8_t *line = bytes + (size_t) y * (size_t) width * 4;
+		uint8_t *line = bytes + (size_t) y * fb_row_bytes(f, width);
 
 		for (int x = target.x; x < target.x + target.width; x++) {
 			double px = (double) x + 0.5;

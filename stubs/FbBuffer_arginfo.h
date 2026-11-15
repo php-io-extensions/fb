@@ -1,5 +1,5 @@
 /* This is a generated file, edit the .stub.php file instead.
- * Stub hash: 541488ed5223765d05766f13693fa9b4ec37074d */
+ * Stub hash: 4edeff1a66bcb119047e17ec0a1779e9cb3e15e6 */
 
 ZEND_BEGIN_ARG_INFO_EX(arginfo_class_FbBuffer___construct, 0, 0, 3)
 	ZEND_ARG_OBJ_INFO(0, format, FbFormat, 0)
@@ -13,6 +13,7 @@ ZEND_BEGIN_ARG_WITH_RETURN_OBJ_INFO_EX(arginfo_class_FbBuffer_over, 0, 5, FbBuff
 	ZEND_ARG_TYPE_INFO(0, height, IS_LONG, 0)
 	ZEND_ARG_TYPE_INFO(0, address, IS_LONG, 0)
 	ZEND_ARG_TYPE_INFO(0, owner, IS_OBJECT, 0)
+	ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, stride, IS_LONG, 0, "0")
 ZEND_END_ARG_INFO()
 
 ZEND_BEGIN_ARG_WITH_RETURN_OBJ_INFO_EX(arginfo_class_FbBuffer_format, 0, 0, FbFormat, 0)
@@ -94,6 +95,20 @@ ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_class_FbBuffer_copy, 0, 5, IS_VO
 	ZEND_ARG_TYPE_INFO(0, height, IS_LONG, 0)
 ZEND_END_ARG_INFO()
 
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_class_FbBuffer_blit, 0, 7, IS_ARRAY, 1)
+	ZEND_ARG_OBJ_INFO(0, source, FbBuffer, 0)
+	ZEND_ARG_TYPE_INFO(0, sx, IS_LONG, 0)
+	ZEND_ARG_TYPE_INFO(0, sy, IS_LONG, 0)
+	ZEND_ARG_TYPE_INFO(0, width, IS_LONG, 0)
+	ZEND_ARG_TYPE_INFO(0, height, IS_LONG, 0)
+	ZEND_ARG_TYPE_INFO(0, x, IS_LONG, 0)
+	ZEND_ARG_TYPE_INFO(0, y, IS_LONG, 0)
+	ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, clipX, IS_LONG, 0, "0")
+	ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, clipY, IS_LONG, 0, "0")
+	ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, clipWidth, IS_LONG, 1, "null")
+	ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, clipHeight, IS_LONG, 1, "null")
+ZEND_END_ARG_INFO()
+
 ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_class_FbBuffer_plane, 0, 1, IS_STRING, 0)
 	ZEND_ARG_TYPE_INFO(0, value, IS_LONG, 0)
 ZEND_END_ARG_INFO()
@@ -136,6 +151,21 @@ ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_class_FbBuffer_paintRgba8, 0, 8,
 	ZEND_ARG_TYPE_INFO(0, rgba8, IS_STRING, 0)
 	ZEND_ARG_TYPE_INFO(0, width, IS_LONG, 0)
 	ZEND_ARG_TYPE_INFO(0, height, IS_LONG, 0)
+	ZEND_ARG_TYPE_INFO(0, inverse, IS_ARRAY, 0)
+	ZEND_ARG_TYPE_INFO(0, x, IS_LONG, 0)
+	ZEND_ARG_TYPE_INFO(0, y, IS_LONG, 0)
+	ZEND_ARG_TYPE_INFO(0, targetWidth, IS_LONG, 0)
+	ZEND_ARG_TYPE_INFO(0, targetHeight, IS_LONG, 0)
+	ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, opacity, IS_LONG, 0, "255")
+	ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, smooth, _IS_BOOL, 0, "false")
+	ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, row, IS_LONG, 0, "0")
+	ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, tint, IS_LONG, 0, "0xffffffff")
+	ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, window, IS_ARRAY, 1, "null")
+	ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, coverage, IS_STRING, 1, "null")
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_class_FbBuffer_paintBuffer, 0, 6, IS_VOID, 0)
+	ZEND_ARG_OBJ_INFO(0, source, FbBuffer, 0)
 	ZEND_ARG_TYPE_INFO(0, inverse, IS_ARRAY, 0)
 	ZEND_ARG_TYPE_INFO(0, x, IS_LONG, 0)
 	ZEND_ARG_TYPE_INFO(0, y, IS_LONG, 0)
@@ -193,12 +223,14 @@ ZEND_METHOD(FbBuffer, region);
 ZEND_METHOD(FbBuffer, rgba8);
 ZEND_METHOD(FbBuffer, blitRgba8);
 ZEND_METHOD(FbBuffer, copy);
+ZEND_METHOD(FbBuffer, blit);
 ZEND_METHOD(FbBuffer, plane);
 ZEND_METHOD(FbBuffer, paintSpans);
 ZEND_METHOD(FbBuffer, paintMasks);
 ZEND_METHOD(FbBuffer, filter);
 ZEND_METHOD(FbBuffer, paintGradient);
 ZEND_METHOD(FbBuffer, paintRgba8);
+ZEND_METHOD(FbBuffer, paintBuffer);
 ZEND_METHOD(FbBuffer, kawaseDown);
 ZEND_METHOD(FbBuffer, kawaseUp);
 ZEND_METHOD(FbBuffer, paintGlass);
@@ -224,12 +256,14 @@ static const zend_function_entry class_FbBuffer_methods[] = {
 	ZEND_ME(FbBuffer, rgba8, arginfo_class_FbBuffer_rgba8, ZEND_ACC_PUBLIC)
 	ZEND_ME(FbBuffer, blitRgba8, arginfo_class_FbBuffer_blitRgba8, ZEND_ACC_PUBLIC)
 	ZEND_ME(FbBuffer, copy, arginfo_class_FbBuffer_copy, ZEND_ACC_PUBLIC)
+	ZEND_ME(FbBuffer, blit, arginfo_class_FbBuffer_blit, ZEND_ACC_PUBLIC)
 	ZEND_ME(FbBuffer, plane, arginfo_class_FbBuffer_plane, ZEND_ACC_PUBLIC)
 	ZEND_ME(FbBuffer, paintSpans, arginfo_class_FbBuffer_paintSpans, ZEND_ACC_PUBLIC)
 	ZEND_ME(FbBuffer, paintMasks, arginfo_class_FbBuffer_paintMasks, ZEND_ACC_PUBLIC)
 	ZEND_ME(FbBuffer, filter, arginfo_class_FbBuffer_filter, ZEND_ACC_PUBLIC)
 	ZEND_ME(FbBuffer, paintGradient, arginfo_class_FbBuffer_paintGradient, ZEND_ACC_PUBLIC)
 	ZEND_ME(FbBuffer, paintRgba8, arginfo_class_FbBuffer_paintRgba8, ZEND_ACC_PUBLIC)
+	ZEND_ME(FbBuffer, paintBuffer, arginfo_class_FbBuffer_paintBuffer, ZEND_ACC_PUBLIC)
 	ZEND_ME(FbBuffer, kawaseDown, arginfo_class_FbBuffer_kawaseDown, ZEND_ACC_PUBLIC)
 	ZEND_ME(FbBuffer, kawaseUp, arginfo_class_FbBuffer_kawaseUp, ZEND_ACC_PUBLIC)
 	ZEND_ME(FbBuffer, paintGlass, arginfo_class_FbBuffer_paintGlass, ZEND_ACC_PUBLIC)

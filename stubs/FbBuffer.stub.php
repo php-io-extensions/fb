@@ -15,12 +15,15 @@ final class FbBuffer
 
     /**
      * A buffer over bytes another object owns: nothing is allocated, copied or
-     * blanked. The bytes at $address are size() bytes in $format, rows packed
-     * with no padding between them, and stay valid while $owner lives; this
-     * buffer keeps $owner alive. Every method then reads and writes them.
-     * A wrong address is the caller's: it is not checked beyond being non-zero.
+     * blanked. The bytes at $address are $height rows in $format, $stride bytes
+     * from one row to the next (0, the default, for packed rows), and stay
+     * valid while $owner lives; this buffer keeps $owner alive. Every method
+     * then reads and writes them. A stride wider than a packed row is for
+     * formats with whole-byte pixels only; filter(), kawaseDown(), kawaseUp()
+     * and paintGlass() refuse a buffer over padded rows. A wrong address is
+     * the caller's: it is not checked beyond being non-zero.
      */
-    public static function over(FbFormat $format, int $width, int $height, int $address, object $owner): FbBuffer {}
+    public static function over(FbFormat $format, int $width, int $height, int $address, object $owner, int $stride = 0): FbBuffer {}
 
     public function format(): FbFormat {}
 
@@ -79,6 +82,18 @@ final class FbBuffer
 
     /** Copy a rect from a buffer of the same size and storage, words as stored. */
     public function copy(FbBuffer $source, int $x, int $y, int $width, int $height): void {}
+
+    /**
+     * Copy the rect ($sx, $sy, $width x $height) of $source, any format and size (this buffer
+     * itself too, overlap allowed), to ($x, $y), clipped to the buffer and to the clip rect as
+     * blitRgba8() clips. Words as stored when both formats share storage; otherwise each pixel is
+     * mapped through RGBA8 in C. The source rect must lie inside $source.
+     *
+     * @param int|null $clipWidth Null clips at the buffer's right edge.
+     * @param int|null $clipHeight Null clips at the buffer's bottom edge.
+     * @return array|null [x, y, width, height] written; null when nothing landed.
+     */
+    public function blit(FbBuffer $source, int $sx, int $sy, int $width, int $height, int $x, int $y, int $clipX = 0, int $clipY = 0, ?int $clipWidth = null, ?int $clipHeight = null): ?array {}
 
     /** One bit per pixel, rows padded to a byte, x0 in bit 7: set where the pixel's word equals $value. */
     public function plane(int $value): string {}
@@ -163,6 +178,12 @@ final class FbBuffer
      * @param string|null $coverage Spans (7 bytes each: y, x, length uint16 LE, coverage uint8) in this buffer's rows, rows ascending and x ascending without overlap, all inside the buffer: a pixel's alpha is scaled by its span's coverage, and a pixel no span holds is not painted.
      */
     public function paintRgba8(string $rgba8, int $width, int $height, array $inverse, int $x, int $y, int $targetWidth, int $targetHeight, int $opacity = 255, bool $smooth = false, int $row = 0, int $tint = 0xFFFFFFFF, ?array $window = null, ?string $coverage = null): void {}
+
+    /**
+     * paintRgba8() with its image read from $source, any format: an RGBA8 buffer is read as it
+     * is, any other is mapped to RGBA8 in C first. Every other argument as paintRgba8()'s.
+     */
+    public function paintBuffer(FbBuffer $source, array $inverse, int $x, int $y, int $targetWidth, int $targetHeight, int $opacity = 255, bool $smooth = false, int $row = 0, int $tint = 0xFFFFFFFF, ?array $window = null, ?string $coverage = null): void {}
 
     /**
      * One level down of a dual-filter (Kawase) pyramid: this RGBA8888 buffer, ceil(width / 2) x ceil(height / 2), from

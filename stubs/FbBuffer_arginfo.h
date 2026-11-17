@@ -202,6 +202,11 @@ ZEND_END_ARG_INFO()
 
 #define arginfo_class_FbBuffer_pointer arginfo_class_FbBuffer_width
 
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_class_FbBuffer_coverage, 0, 0, IS_STRING, 0)
+	ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, x, IS_LONG, 0, "0")
+	ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, y, IS_LONG, 0, "0")
+ZEND_END_ARG_INFO()
+
 ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_class_FbBuffer_granularity, 0, 0, IS_ARRAY, 0)
 ZEND_END_ARG_INFO()
 
@@ -235,6 +240,7 @@ ZEND_METHOD(FbBuffer, kawaseDown);
 ZEND_METHOD(FbBuffer, kawaseUp);
 ZEND_METHOD(FbBuffer, paintGlass);
 ZEND_METHOD(FbBuffer, pointer);
+ZEND_METHOD(FbBuffer, coverage);
 ZEND_METHOD(FbBuffer, granularity);
 
 static const zend_function_entry class_FbBuffer_methods[] = {
@@ -268,6 +274,7 @@ static const zend_function_entry class_FbBuffer_methods[] = {
 	ZEND_ME(FbBuffer, kawaseUp, arginfo_class_FbBuffer_kawaseUp, ZEND_ACC_PUBLIC)
 	ZEND_ME(FbBuffer, paintGlass, arginfo_class_FbBuffer_paintGlass, ZEND_ACC_PUBLIC)
 	ZEND_ME(FbBuffer, pointer, arginfo_class_FbBuffer_pointer, ZEND_ACC_PUBLIC)
+	ZEND_ME(FbBuffer, coverage, arginfo_class_FbBuffer_coverage, ZEND_ACC_PUBLIC)
 	ZEND_ME(FbBuffer, granularity, arginfo_class_FbBuffer_granularity, ZEND_ACC_PUBLIC)
 	ZEND_FE_END
 };

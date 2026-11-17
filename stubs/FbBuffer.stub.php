@@ -99,6 +99,13 @@ final class FbBuffer
     public function plane(int $value): string {}
 
     /**
+     * The buffer read as coverage, as spans (7 bytes each: y, x, length uint16 LE, coverage uint8): an INDEX8 buffer's
+     * bytes, or a 32-bit RGBA8888 buffer's alpha, run by run, each run of one coverage above 0 one span; y is the row
+     * as get() reads it. ($x, $y) is where this buffer's top-left pixel stands; every span must land within 0..65535.
+     */
+    public function coverage(int $x = 0, int $y = 0): string {}
+
+    /**
      * Paint coverage spans in one colour. $spans holds 7-byte records,
      * little-endian: y, x, length (uint16) and coverage (uint8). Effective
      * alpha is alpha × coverage; RGB and grey layouts blend source-over,

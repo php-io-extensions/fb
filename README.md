@@ -350,6 +350,12 @@ One bit per pixel, rows padded to a byte, `x` 0 in bit 7: set where the pixel's 
 
 ---
 
+#### `coverage(int $x = 0, int $y = 0): string`
+
+The buffer read as coverage, as spans: an `FB_LAYOUT_INDEX8` buffer's bytes, or an `FB_LAYOUT_RGBA8888` buffer's alpha in any channel order, run by run, each run of one coverage above 0 one 7-byte span (y, x, length uint16 LE; coverage uint8). `y` is the row as `get()` reads it. `($x, $y)` is where the buffer's top-left pixel stands, so a library that draws coverage into a buffer by address gets surface spans without a byte passing through PHP. Other layouts, and offsets that put a span past 65535, throw `ValueError`.
+
+---
+
 #### `blitRgba8(string $rgba8, int $width, int $height, int $x, int $y, int $clipX = 0, int $clipY = 0, ?int $clipWidth = null, ?int $clipHeight = null): ?array`
 
 Maps a `$width` × `$height` RGBA8 image into the buffer with its top-left at `($x, $y)`, words as the format maps them, no blending. Unlike every other call it clips, to the buffer and to the clip rect: a `null` clip side runs to the buffer's edge. Answers the rect written, or `null` when nothing landed. `$rgba8` must be exactly `$width` × `$height` × 4 bytes.
@@ -434,7 +440,7 @@ php -n -d extension="$PWD/modules/fb.so" vendor/bin/pest
 ```
 
 ```console
-Tests:    1 skipped, 975 passed (2784 assertions)
+Tests:    1 skipped, 1160 passed (3450 assertions)
 Duration: 0.67s
 ```
 

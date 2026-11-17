@@ -1,5 +1,9 @@
 # Log
 
+## 2026-11-17
+
+* `FbBuffer::coverage()`: a buffer read as coverage, as spans, in C: INDEX8 bytes or RGBA8888 alpha, run by run, placed at an offset. Library modules draw coverage into a buffer by address and take spans from here, so no coverage byte is read in PHP. `tests/CoverageTest.php`, 7 tests; four breaks in the C each caught. Pest 1160 passed. [surface](api/surface.md)
+
 ## 2026-11-15
 
 * `FbBuffer::blit()` and `FbBuffer::paintBuffer()`: another buffer as the source, so a frame's pixels go buffer to buffer in C instead of through an RGBA8 PHP string. `blit` copies words as stored when both formats share storage, maps through RGBA8 in C otherwise, and copies within one buffer (overlap allowed) by walking away from the target. `paintBuffer` reads an RGBA8 source in place and maps any other in C first. Both give the same bytes as the string paths (`blitRgba8`/`paintRgba8` of `rgba8()`); `tests/BlitTest.php`, 89 tests. Pest 1137 passed on NTS and ZTS.

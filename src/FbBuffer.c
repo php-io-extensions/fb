@@ -1,5 +1,4 @@
 #include "runtime.h"
-#include "zend_smart_str.h"
 #include "sink.h"
 #include "filter.h"
 #include "../stubs/FbBuffer_arginfo.h"
@@ -633,66 +632,6 @@ ZEND_METHOD(FbBuffer, plane)
 	ZSTR_VAL(out)[ZSTR_LEN(out)] = '\0';
 
 	RETURN_NEW_STR(out);
-}
-
-ZEND_METHOD(FbBuffer, coverage)
-{
-	zend_long x = 0, y = 0;
-
-	ZEND_PARSE_PARAMETERS_START(0, 2)
-		Z_PARAM_OPTIONAL
-		Z_PARAM_LONG(x)
-		Z_PARAM_LONG(y)
-	ZEND_PARSE_PARAMETERS_END();
-	PHPFB_THIS_BUFFER(self);
-
-	size_t pixel;
-	size_t at; /* which byte of a pixel is its coverage */
-	if (self->format.layout == FB_LAYOUT_INDEX8) {
-		pixel = 1;
-		at = 0;
-	} else if (self->format.layout == FB_LAYOUT_RGBA8888) {
-		pixel = 4;
-		at = (self->format.channel_order == FB_CHANNELS_ARGB || self->format.channel_order == FB_CHANNELS_ABGR) ? 0 : 3;
-	} else {
-		zend_value_error("coverage() reads an INDEX8 or RGBA8888 buffer.");
-		RETURN_THROWS();
-	}
-	if (x < 0 || y < 0 || x + self->width > 65535 || y + self->height > 65536) {
-		zend_argument_value_error(x < 0 || x + self->width > 65535 ? 1 : 2, "puts a span outside 0..65535");
-		RETURN_THROWS();
-	}
-	size_t row = self->format.stride ? self->format.stride : (size_t) self->width * pixel;
-
-	/* At most one span per pixel. */
-	smart_str out = {0};
-	for (int r = 0; r < self->height; r++) {
-		/* y is the stored row, as get() reads it: the scan order only orders emitted regions. */
-		const uint8_t *line = self->bytes + (size_t) r * row + at;
-		int c = 0;
-		while (c < self->width) {
-			uint8_t v = line[(size_t) c * pixel];
-			int start = c;
-			while (c < self->width && line[(size_t) c * pixel] == v) {
-				c++;
-			}
-			if (v == 0) {
-				continue;
-			}
-			unsigned char span[7];
-			uint16_t sy = (uint16_t) (y + r), sx = (uint16_t) (x + start), len = (uint16_t) (c - start);
-			span[0] = sy & 0xFF; span[1] = sy >> 8;
-			span[2] = sx & 0xFF; span[3] = sx >> 8;
-			span[4] = len & 0xFF; span[5] = len >> 8;
-			span[6] = v;
-			smart_str_appendl(&out, (const char *) span, 7);
-		}
-	}
-	if (out.s == NULL) {
-		RETURN_EMPTY_STRING();
-	}
-	smart_str_0(&out);
-	RETURN_STR(out.s);
 }
 
 /* Spans checked, every one before any is painted, then painted: 1 with their bounds, 0 for none, -1 with a ValueError. */
